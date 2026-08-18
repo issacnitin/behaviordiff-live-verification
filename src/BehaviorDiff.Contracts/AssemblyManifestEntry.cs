@@ -8,6 +8,12 @@ namespace BehaviorDiff.Contracts
 
         /// <summary>Arrived on the AssemblyLoad event, either as a side effect of patching or later.</summary>
         AssemblyLoadEvent,
+
+        /// <summary>
+        /// Instrumented at build time by the weaver. No patcher ran, so there is no discovery moment and no
+        /// window between load and instrumentation: every call in the process was observable.
+        /// </summary>
+        BuildTimeWeave,
     }
 
     /// <summary>

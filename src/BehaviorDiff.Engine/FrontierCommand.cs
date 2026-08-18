@@ -149,6 +149,8 @@ namespace BehaviorDiff.Engine
                 .Where(m => m.MethodFullName != null)
                 .GroupBy(m => m.MethodFullName!, StringComparer.Ordinal)
                 .ToDictionary(g => g.Key, g => g.First().Assembly, StringComparer.Ordinal);
+            // Woven assemblies never qualify: they carry instrumentation in the IL, so there is no
+            // pre-instrumentation window. ManifestNdjson rejects the contradictory combination at parse time.
             var degradedAssemblies = set.Coverage.Assemblies
                 .Where(a => a.LatePatched)
                 .ToDictionary(a => a.Assembly, a => "LatePatched", StringComparer.Ordinal);

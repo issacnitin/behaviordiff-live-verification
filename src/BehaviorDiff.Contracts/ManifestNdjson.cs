@@ -232,6 +232,12 @@ namespace BehaviorDiff.Contracts
             {
                 AppendBoolean(builder, LatePatchedField, true, first: false);
             }
+            else if (entry.Discovery == AssemblyDiscovery.BuildTimeWeave)
+            {
+                // Structurally impossible for a woven assembly: written rather than omitted so a reader
+                // never has to distinguish "false" from "absent".
+                AppendBoolean(builder, LatePatchedField, false, first: false);
+            }
 
             AppendNumber(builder, TracedCallsField, entry.TracedCalls, first: false);
             AppendNumber(builder, MembersWithExactSourceField, entry.MembersWithExactSource, first: false);
@@ -419,9 +425,19 @@ namespace BehaviorDiff.Contracts
                 case nameof(AssemblyDiscovery.AssemblyLoadEvent):
                     discovery = AssemblyDiscovery.AssemblyLoadEvent;
                     break;
+                case nameof(AssemblyDiscovery.BuildTimeWeave):
+                    discovery = AssemblyDiscovery.BuildTimeWeave;
+                    break;
                 default:
                     error = "unrecognised " + DiscoveryField + ": '" + discoveryText + "'";
                     return false;
+            }
+
+            if (discovery == AssemblyDiscovery.BuildTimeWeave && GetBoolean(fields, LatePatchedField))
+            {
+                error = LatePatchedField + " cannot be true when " + DiscoveryField + " is "
+                    + nameof(AssemblyDiscovery.BuildTimeWeave);
+                return false;
             }
 
             error = null;
