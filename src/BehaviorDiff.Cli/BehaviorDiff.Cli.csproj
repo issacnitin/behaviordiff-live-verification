@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>BehaviorDiff.Cli</RootNamespace>
+    <AssemblyName>behaviordiff</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\BehaviorDiff.Engine\BehaviorDiff.Engine.csproj" />
+    <!-- Referenced so the tracer and its runtime dependencies land in this app's output and can be
+         copied into the injection kit; the CLI itself never calls into them. -->
+    <ProjectReference Include="..\BehaviorDiff.Tracer.Xunit\BehaviorDiff.Tracer.Xunit.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The adapter is recompiled per target repo against that repo's own xunit version, so its source
+         is embedded rather than copied - a second copy would drift from the type actually shipped. -->
+    <EmbeddedResource Include="..\BehaviorDiff.Tracer.Xunit\TraceTestAttribute.cs" LogicalName="TraceTestAttribute.cs" />
+  </ItemGroup>
+
+</Project>
