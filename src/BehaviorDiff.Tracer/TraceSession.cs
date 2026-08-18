@@ -176,26 +176,13 @@ namespace BehaviorDiff.Tracer
             t_inTracer = true;
             try
             {
+                // The only MethodBase-dependent step: the patcher populated this registry at install time.
                 if (!s_methods.TryGetValue(method, out MethodTraceInfo? info))
                 {
                     return null;
                 }
 
-                // Counts what was observed. Calls that happened before this member was patched ran no
-                // tracer code at all and are unobservable; see AssemblyManifestEntry.
-                info.Coverage.NoteTracedCall();
-
-                CallFrame? parent = s_currentFrame.Value;
-                var frame = new CallFrame(
-                    Interlocked.Increment(ref s_nextCallId),
-                    parent,
-                    info,
-                    s_testId.Value ?? NoTestId,
-                    ValueRenderer.RenderArguments(info.ParameterNames, args, s_options.MaxDigestLength),
-                    Environment.CurrentManagedThreadId);
-
-                s_currentFrame.Value = frame;
-                return frame;
+                return BeginCallCore(info, args);
             }
             catch (Exception)
             {
@@ -206,6 +193,53 @@ namespace BehaviorDiff.Tracer
             {
                 t_inTracer = false;
             }
+        }
+
+        /// <summary>
+        /// Entry point for build-time weaving, where the descriptor is emitted alongside the call site and
+        /// there is no patcher to populate the MethodBase registry.
+        /// </summary>
+        internal static object? BeginCall(MethodTraceInfo info, object[] args)
+        {
+            if (s_buffer is null || t_inTracer)
+            {
+                return null;
+            }
+
+            t_inTracer = true;
+            try
+            {
+                return BeginCallCore(info, args);
+            }
+            catch (Exception)
+            {
+                Interlocked.Increment(ref s_internalErrors);
+                return null;
+            }
+            finally
+            {
+                t_inTracer = false;
+            }
+        }
+
+        /// <summary>Shared by both instrumentation backends so a frame is built identically either way.</summary>
+        private static CallFrame BeginCallCore(MethodTraceInfo info, object[] args)
+        {
+            // Counts what was observed. Calls that happened before this member was patched ran no
+            // tracer code at all and are unobservable; see AssemblyManifestEntry.
+            info.Coverage.NoteTracedCall();
+
+            CallFrame? parent = s_currentFrame.Value;
+            var frame = new CallFrame(
+                Interlocked.Increment(ref s_nextCallId),
+                parent,
+                info,
+                s_testId.Value ?? NoTestId,
+                ValueRenderer.RenderArguments(info.ParameterNames, args, s_options.MaxDigestLength),
+                Environment.CurrentManagedThreadId);
+
+            s_currentFrame.Value = frame;
+            return frame;
         }
 
         internal static void CompleteSync(CallFrame frame, DigestResult? result)
