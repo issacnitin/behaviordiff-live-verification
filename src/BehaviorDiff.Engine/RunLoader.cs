@@ -189,6 +189,14 @@ namespace BehaviorDiff.Engine
                 return absolute.Replace('\\', '/');
             }
 
+            // SourceLink's DeterministicSourcePaths rewrites compile-time paths to this root, so a
+            // release-built assembly carries no machine path to strip. IsPathRooted still calls it rooted.
+            if (absolute.StartsWith("/_/", StringComparison.Ordinal))
+            {
+                report.PathsNormalized++;
+                return absolute.Substring(3).Replace('\\', '/');
+            }
+
             if (root.Length > 0 && absolute.StartsWith(root, StringComparison.OrdinalIgnoreCase))
             {
                 string trimmed = absolute.Substring(root.Length).TrimStart('\\', '/');
