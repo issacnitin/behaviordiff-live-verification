@@ -114,6 +114,18 @@ namespace BehaviorDiff.Weaver
             using ModuleDefinition module = ModuleDefinition.ReadModule(assemblyPath, readerParameters);
             var refs = new Refs(module);
 
+            TypeDefinition moduleType = module.GetType("<Module>")
+                ?? throw new InvalidOperationException("no <Module> type");
+
+            // Descriptor indices are process-global but assigned per assembly, so each module carries the
+            // base its own indices are relative to.
+            // Assembly-visible, not private: every woven method in the module reads it, not just <Module>.
+            var baseField = new FieldDefinition(
+                "<BehaviorDiffBase>",
+                Mono.Cecil.FieldAttributes.Assembly | Mono.Cecil.FieldAttributes.Static,
+                module.TypeSystem.Int32);
+            moduleType.Fields.Add(baseField);
+
             var byToken = new Dictionary<int, MethodDefinition>();
             foreach (TypeDefinition type in module.GetTypes())
             {
@@ -136,7 +148,7 @@ namespace BehaviorDiff.Weaver
 
                 try
                 {
-                    VariableDefinition frameLocal = Weave(target, plan, refs);
+                    VariableDefinition frameLocal = Weave(target, plan, refs, baseField);
                     woven++;
 
                     string? assertion = Verify(target, frameLocal, refs);
@@ -152,7 +164,7 @@ namespace BehaviorDiff.Weaver
                 }
             }
 
-            EmitModuleInitializer(module, plans, refs, reflected.GetName().Name ?? "unknown", isTestAssembly);
+            EmitModuleInitializer(module, moduleType, baseField, plans, refs, reflected.GetName().Name ?? "unknown", isTestAssembly);
 
             if (failures.Count > 0)
             {
@@ -179,7 +191,7 @@ namespace BehaviorDiff.Weaver
             return woven + skipped + declined == plans.Count ? 0 : 1;
         }
 
-        private static VariableDefinition Weave(MethodDefinition method, MemberPlan plan, Refs refs)
+        private static VariableDefinition Weave(MethodDefinition method, MemberPlan plan, Refs refs, FieldDefinition baseField)
         {
             MethodBody body = method.Body;
             body.SimplifyMacros();
@@ -258,7 +270,7 @@ namespace BehaviorDiff.Weaver
             }
 
             // InsertBefore keeps insertion order, so the prologue is emitted forwards, not reversed.
-            foreach (Instruction instruction in BuildPrologue(method, plan, frame, refs))
+            foreach (Instruction instruction in BuildPrologue(method, plan, frame, refs, baseField))
             {
                 il.InsertBefore(firstOriginal, instruction);
             }
@@ -280,11 +292,14 @@ namespace BehaviorDiff.Weaver
             MethodDefinition method,
             MemberPlan plan,
             VariableDefinition frame,
-            Refs refs)
+            Refs refs,
+            FieldDefinition baseField)
         {
             var instructions = new List<Instruction>
             {
+                Instruction.Create(OpCodes.Ldsfld, baseField),
                 Instruction.Create(OpCodes.Ldc_I4, plan.WeaveIndex),
+                Instruction.Create(OpCodes.Add),
                 Instruction.Create(OpCodes.Ldc_I4, method.Parameters.Count),
                 Instruction.Create(OpCodes.Newarr, method.Module.TypeSystem.Object),
             };
@@ -370,14 +385,13 @@ namespace BehaviorDiff.Weaver
 
         private static void EmitModuleInitializer(
             ModuleDefinition module,
+            TypeDefinition moduleType,
+            FieldDefinition baseField,
             List<MemberPlan> plans,
             Refs refs,
             string assemblyName,
             bool isTestAssembly)
         {
-            TypeDefinition moduleType = module.GetType("<Module>")
-                ?? throw new InvalidOperationException("no <Module> type");
-
             MethodDefinition? cctor = moduleType.Methods.FirstOrDefault(m => m.Name == ".cctor");
             if (cctor is null)
             {
@@ -391,8 +405,6 @@ namespace BehaviorDiff.Weaver
                 moduleType.Methods.Add(cctor);
             }
 
-            var assemblyIndex = new VariableDefinition(module.TypeSystem.Int32);
-            cctor.Body.Variables.Add(assemblyIndex);
             cctor.Body.InitLocals = true;
 
             ILProcessor il = cctor.Body.GetILProcessor();
@@ -403,14 +415,14 @@ namespace BehaviorDiff.Weaver
             Emit(Instruction.Create(OpCodes.Ldstr, assemblyName));
             Emit(Instruction.Create(isTestAssembly ? OpCodes.Ldc_I4_1 : OpCodes.Ldc_I4_0));
             Emit(Instruction.Create(OpCodes.Call, refs.RegisterAssembly));
-            Emit(Instruction.Create(OpCodes.Stloc, assemblyIndex));
+            Emit(Instruction.Create(OpCodes.Stsfld, baseField));
 
             foreach (MemberPlan plan in plans)
             {
                 if (plan.SkipReason is null)
                 {
+                    Emit(Instruction.Create(OpCodes.Ldsfld, baseField));
                     Emit(Instruction.Create(OpCodes.Ldc_I4, plan.WeaveIndex));
-                    Emit(Instruction.Create(OpCodes.Ldloc, assemblyIndex));
                     Emit(Instruction.Create(OpCodes.Ldstr, plan.FullName));
                     Emit(plan.FilePath is null
                         ? Instruction.Create(OpCodes.Ldnull)
@@ -424,7 +436,7 @@ namespace BehaviorDiff.Weaver
                 }
                 else
                 {
-                    Emit(Instruction.Create(OpCodes.Ldloc, assemblyIndex));
+                    Emit(Instruction.Create(OpCodes.Ldsfld, baseField));
                     Emit(Instruction.Create(OpCodes.Ldstr, plan.FullName));
                     Emit(Instruction.Create(OpCodes.Ldstr, plan.SkipReason));
                     Emit(Instruction.Create(OpCodes.Ldstr, plan.ReturnKind.ToString()));

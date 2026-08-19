@@ -22,6 +22,9 @@ namespace BehaviorDiff.Tracer
 
         private static AssemblyCoverage?[] s_assemblies = new AssemblyCoverage?[0];
 
+        private static readonly System.Collections.Generic.Dictionary<int, AssemblyCoverage> s_coverageByBase =
+            new System.Collections.Generic.Dictionary<int, AssemblyCoverage>();
+
         // Every member the weaver considered, woven or skipped, so discovered == Woven + Skipped reconciles
         // the same way the Harmony manifest does. A weave failure is a build error, never a manifest row.
         private static readonly System.Collections.Generic.List<ManifestEntry> s_members =
@@ -34,7 +37,10 @@ namespace BehaviorDiff.Tracer
 
         internal static int LostFrames => System.Threading.Volatile.Read(ref s_lostFrames);
 
-        /// <summary>Declares a woven assembly. Called from the woven module initializer before any Register.</summary>
+        /// <summary>
+        /// Declares a woven assembly and reserves its descriptor range. The returned base is added to each
+        /// call site's local index, so indices stay unique when several assemblies are woven into one process.
+        /// </summary>
         public static int RegisterAssembly(string assemblyName, bool isTestAssembly)
         {
             if (assemblyName == null)
@@ -49,19 +55,22 @@ namespace BehaviorDiff.Tracer
                     IsTestAssembly = isTestAssembly,
                 };
 
+                int baseOffset = s_descriptors.Length;
+                s_coverageByBase[baseOffset] = coverage;
+
                 int index = s_assemblies.Length;
                 var grown = new AssemblyCoverage?[index + 1];
                 Array.Copy(s_assemblies, grown, index);
                 grown[index] = coverage;
                 s_assemblies = grown;
-                return index;
+                return baseOffset;
             }
         }
 
         /// <summary>Declares one woven method. The index is a dense slot the call site passes back to <see cref="Enter"/>.</summary>
         public static void Register(
-            int index,
-            int assemblyIndex,
+            int baseOffset,
+            int localIndex,
             string fullName,
             string? filePath,
             int line,
@@ -70,9 +79,9 @@ namespace BehaviorDiff.Tracer
             bool isTestRoot,
             string parameterNames)
         {
-            if (index < 0)
+            if (localIndex < 0)
             {
-                throw new ArgumentOutOfRangeException(nameof(index));
+                throw new ArgumentOutOfRangeException(nameof(localIndex));
             }
 
             if (!Enum.IsDefined(typeof(ReturnKind), returnKind))
@@ -82,13 +91,12 @@ namespace BehaviorDiff.Tracer
 
             lock (s_gate)
             {
-                if (assemblyIndex < 0 || assemblyIndex >= s_assemblies.Length)
+                if (!s_coverageByBase.TryGetValue(baseOffset, out AssemblyCoverage coverage))
                 {
-                    throw new ArgumentOutOfRangeException(nameof(assemblyIndex));
+                    throw new ArgumentOutOfRangeException(nameof(baseOffset));
                 }
 
-                AssemblyCoverage coverage = s_assemblies[assemblyIndex]!;
-
+                int index = baseOffset + localIndex;
                 if (index >= s_descriptors.Length)
                 {
                     var grown = new MethodTraceInfo?[index + 1];
@@ -130,7 +138,7 @@ namespace BehaviorDiff.Tracer
         /// for every discovered member, which is what makes the frontier rule sound.
         /// </summary>
         public static void RegisterSkipped(
-            int assemblyIndex,
+            int baseOffset,
             string fullName,
             string skipReason,
             string returnKind,
@@ -139,12 +147,11 @@ namespace BehaviorDiff.Tracer
         {
             lock (s_gate)
             {
-                if (assemblyIndex < 0 || assemblyIndex >= s_assemblies.Length)
+                if (!s_coverageByBase.TryGetValue(baseOffset, out AssemblyCoverage coverage))
                 {
-                    throw new ArgumentOutOfRangeException(nameof(assemblyIndex));
+                    throw new ArgumentOutOfRangeException(nameof(baseOffset));
                 }
 
-                AssemblyCoverage coverage = s_assemblies[assemblyIndex]!;
                 s_members.Add(new ManifestEntry
                 {
                     Assembly = coverage.Name,
