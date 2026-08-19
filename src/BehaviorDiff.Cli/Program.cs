@@ -13,6 +13,7 @@ namespace BehaviorDiff.Cli
         {
             string? baseRef = null;
             string? prRef = null;
+            string? ciProvider = null;
             string? work = null;
             bool keep = false;
             var positional = new List<string>();
@@ -23,6 +24,7 @@ namespace BehaviorDiff.Cli
                 {
                     case "--base": baseRef = Next(args, ref i); break;
                     case "--pr": prRef = Next(args, ref i); break;
+                    case "--ci": ciProvider = Next(args, ref i); break;
                     case "--work": work = Next(args, ref i); break;
                     case "--keep": keep = true; break;
                     case "-h":
@@ -30,13 +32,21 @@ namespace BehaviorDiff.Cli
                         Usage();
                         return ExitCodes.NoUnexpected;
                     default:
-                        positional.Add(args[i]);
+                        if (args[i].StartsWith("--ci=", StringComparison.Ordinal))
+                        {
+                            ciProvider = args[i].Substring("--ci=".Length);
+                        }
+                        else
+                        {
+                            positional.Add(args[i]);
+                        }
+
                         break;
                 }
             }
 
             string? repo = positional.FirstOrDefault();
-            if (repo is null || baseRef is null || prRef is null)
+            if (ciProvider is null && (repo is null || baseRef is null || prRef is null))
             {
                 Usage();
                 return ExitCodes.BuildOrTestFailure;
@@ -47,7 +57,8 @@ namespace BehaviorDiff.Cli
 
             try
             {
-                return new Pipeline(Path.GetFullPath(repo), baseRef, prRef, workDirectory, keep).Run();
+                string resolvedRepository = RefResolution.ResolveRepository(repo, ciProvider);
+                return new Pipeline(resolvedRepository, baseRef, prRef, ciProvider, workDirectory, keep).Run();
             }
             catch (CliException ex)
             {
@@ -70,6 +81,7 @@ namespace BehaviorDiff.Cli
         private static void Usage()
         {
             Console.WriteLine("usage: behaviordiff <repo> --base <ref> --pr <ref> [--work <dir>] [--keep]");
+            Console.WriteLine("       behaviordiff [<repo>] --ci=azuredevops [--work <dir>] [--keep]");
             Console.WriteLine();
             Console.WriteLine("  exit 0  analyzed, no unexpected divergences");
             Console.WriteLine("  exit 1  analyzed, unexpected divergences found");
@@ -82,16 +94,24 @@ namespace BehaviorDiff.Cli
     internal sealed class Pipeline
     {
         private readonly string _repo;
-        private readonly string _baseRef;
-        private readonly string _prRef;
+        private readonly string? _baseRef;
+        private readonly string? _prRef;
+        private readonly string? _ciProvider;
         private readonly string _work;
         private readonly bool _keep;
 
-        internal Pipeline(string repo, string baseRef, string prRef, string work, bool keep)
+        internal Pipeline(
+            string repo,
+            string? baseRef,
+            string? prRef,
+            string? ciProvider,
+            string work,
+            bool keep)
         {
             _repo = repo;
             _baseRef = baseRef;
             _prRef = prRef;
+            _ciProvider = ciProvider;
             _work = work;
             _keep = keep;
         }
@@ -108,10 +128,12 @@ namespace BehaviorDiff.Cli
                 throw new CliException(_repo + " is not a git repository.");
             }
 
-            string baseSha = Shell.Git(_repo, "rev-parse", _baseRef);
-            string prSha = Shell.Git(_repo, "rev-parse", _prRef);
-            Console.WriteLine("  base : " + _baseRef + " -> " + baseSha);
-            Console.WriteLine("  pr   : " + _prRef + " -> " + prSha);
+            ResolvedRefs refs = RefResolution.Resolve(_repo, _baseRef, _prRef, _ciProvider);
+            Console.WriteLine("  base       : " + refs.BaseLabel + " -> " + refs.BaseSha);
+            Console.WriteLine("  pr         : " + refs.PrLabel + " -> " + refs.PrSha);
+            Console.WriteLine("  merge base : " + refs.MergeBaseSha);
+            Console.WriteLine("  PR commits : " + refs.PrCommitCount);
+            Console.WriteLine("  changed from merge base: " + refs.ChangedFiles.Count);
 
             string baseTree = Path.Combine(_work, "base");
             string prTree = Path.Combine(_work, "pr");
@@ -120,8 +142,8 @@ namespace BehaviorDiff.Cli
             {
                 Console.WriteLine();
                 Console.WriteLine("=== 1. worktrees ===");
-                Shell.Git(_repo, "worktree", "add", "--detach", baseTree, baseSha);
-                Shell.Git(_repo, "worktree", "add", "--detach", prTree, prSha);
+                Shell.Git(_repo, "worktree", "add", "--detach", baseTree, refs.BaseSha);
+                Shell.Git(_repo, "worktree", "add", "--detach", prTree, refs.PrSha);
                 Console.WriteLine("  stale bin/obj removed: " + (StripBuildOutput(baseTree) + StripBuildOutput(prTree)));
 
                 Console.WriteLine();
@@ -179,7 +201,7 @@ namespace BehaviorDiff.Cli
 
                 Console.WriteLine();
                 Console.WriteLine("=== 8. changed files ===");
-                string changedList = WriteChangedFiles(baseSha, prSha);
+                string changedList = WriteChangedFiles(refs);
 
                 Console.WriteLine();
                 Console.WriteLine("=== 9. engine part 1 ===");
@@ -514,19 +536,13 @@ namespace BehaviorDiff.Cli
             }
         }
 
-        private string WriteChangedFiles(string baseSha, string prSha)
+        private string WriteChangedFiles(ResolvedRefs refs)
         {
-            string raw = Shell.Git(_repo, "diff", "--name-only", baseSha, prSha);
-            var changed = raw.Split('\n', StringSplitOptions.RemoveEmptyEntries)
-                .Select(l => l.Trim().Replace('\\', '/'))
-                .Where(l => l.Length > 0)
-                .ToList();
-
             string path = Path.Combine(_work, "changed-files.txt");
-            File.WriteAllLines(path, changed);
+            File.WriteAllLines(path, refs.ChangedFiles);
 
-            Console.WriteLine("  changed files: " + changed.Count);
-            foreach (string file in changed.Take(15))
+            Console.WriteLine("  changed files: " + refs.ChangedFiles.Count);
+            foreach (string file in refs.ChangedFiles.Take(15))
             {
                 Console.WriteLine("    " + file);
             }
