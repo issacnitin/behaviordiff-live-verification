@@ -15,7 +15,7 @@ namespace BehaviorDiff.Tracer
     {
         None = 0,
 
-        /// <summary>Declared on a generic type definition; a closed postfix cannot be built for it.</summary>
+        /// <summary>Declared on a generic type definition. Harmony only; Cecil weaves the definition.</summary>
         GenericTypeDefinition,
 
         CompilerGeneratedType,
@@ -35,7 +35,7 @@ namespace BehaviorDiff.Tracer
         /// <summary>Abstract, extern, or runtime-implemented: no IL to intercept.</summary>
         NoBody,
 
-        /// <summary>Open generic method; the type argument is only known per call.</summary>
+        /// <summary>Open generic method. Harmony only; Cecil weaves the definition.</summary>
         GenericDefinition,
 
         /// <summary>Returns or takes a ref struct or pointer, which cannot round-trip through object[].</summary>
