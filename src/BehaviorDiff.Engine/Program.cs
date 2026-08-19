@@ -32,6 +32,8 @@ namespace BehaviorDiff.Engine
                         return Diff(args);
                     case "frontier":
                         return Frontier(args);
+                    case "findings":
+                        return Findings(args);
                     case "--help":
                     case "-h":
                         PrintUsage();
@@ -57,6 +59,56 @@ namespace BehaviorDiff.Engine
                 Console.Error.WriteLine("Access denied: " + ex.Message);
                 return ExitUsage;
             }
+        }
+
+        private static int Findings(string[] args)
+        {
+            string divergenceSet = string.Empty;
+            string frontierReport = string.Empty;
+            string output = string.Empty;
+            string baseSha = string.Empty;
+            string prSha = string.Empty;
+            string mergeBaseSha = string.Empty;
+            int exitCode = 0;
+
+            for (int i = 1; i < args.Length; i++)
+            {
+                if (i + 1 >= args.Length)
+                {
+                    Console.Error.WriteLine("Missing value for " + args[i]);
+                    return ExitUsage;
+                }
+
+                switch (args[i])
+                {
+                    case "--divergences": divergenceSet = args[++i]; break;
+                    case "--frontier": frontierReport = args[++i]; break;
+                    case "--out": output = args[++i]; break;
+                    case "--exit-code": exitCode = int.Parse(args[++i], CultureInfo.InvariantCulture); break;
+                    case "--base-sha": baseSha = args[++i]; break;
+                    case "--pr-sha": prSha = args[++i]; break;
+                    case "--merge-base": mergeBaseSha = args[++i]; break;
+                    default:
+                        Console.Error.WriteLine("Unknown option " + args[i]);
+                        return ExitUsage;
+                }
+            }
+
+            if (divergenceSet.Length == 0 || frontierReport.Length == 0 || output.Length == 0)
+            {
+                Console.Error.WriteLine("usage: findings --divergences <set.json> --frontier <report.json> --out <findings.json>");
+                return ExitUsage;
+            }
+
+            FindingsCommand.WriteAnalyzed(
+                divergenceSet,
+                frontierReport,
+                output,
+                exitCode,
+                baseSha,
+                prSha,
+                mergeBaseSha);
+            return ExitOk;
         }
 
         private static int Frontier(string[] args)

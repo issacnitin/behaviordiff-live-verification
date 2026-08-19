@@ -26,6 +26,8 @@ namespace BehaviorDiff.Engine
         internal string? PrRoot { get; set; }
 
         internal string Output { get; set; } = string.Empty;
+
+        internal string? RefusalReason { get; set; }
     }
 
     /// <summary>
@@ -330,6 +332,7 @@ namespace BehaviorDiff.Engine
 
             if (refusals.Count > 0)
             {
+                options.RefusalReason = string.Join(Environment.NewLine, refusals);
                 Console.WriteLine();
                 Console.Error.WriteLine("REFUSED to emit a DivergenceSet. An empty or degenerate comparison compares equal,");
                 Console.Error.WriteLine("and a clean report produced from no data is indistinguishable from a clean result.");
@@ -549,6 +552,7 @@ namespace BehaviorDiff.Engine
                     methodFullName = e.Event.MethodFullName,
                     isHarness = e.Event.IsHarness,
                     filePath = e.RelativePath,
+                    line = e.Event.Line,
                     process = e.ProcessKey,
                 }).ToArray(),
             };

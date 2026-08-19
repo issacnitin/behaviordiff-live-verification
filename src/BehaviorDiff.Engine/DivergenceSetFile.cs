@@ -139,6 +139,8 @@ namespace BehaviorDiff.Engine
 
         [JsonPropertyName("filePath")] public string? FilePath { get; set; }
 
+        [JsonPropertyName("line")] public int? Line { get; set; }
+
         [JsonPropertyName("process")] public string Process { get; set; } = string.Empty;
     }
 

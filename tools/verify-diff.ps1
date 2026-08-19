@@ -140,4 +140,26 @@ $report = Join-Path $work 'frontier-report.json'
 & dotnet run --project (Join-Path $repo 'src/BehaviorDiff.Engine') -c Release --no-build -- `
     frontier --in $out --changed-files $changedList --out $report
 
-exit $LASTEXITCODE
+$frontierExit = $LASTEXITCODE
+if ($frontierExit -ne 0) { exit $frontierExit }
+
+Write-Host ''
+Write-Host '=== canonical findings ===' -ForegroundColor Cyan
+$findings = Join-Path $work 'findings.json'
+$frontierDocument = Get-Content $report -Raw | ConvertFrom-Json
+$findingsExit = if ($frontierDocument.counts.unexpected -gt 0) { 1 } else { 0 }
+& dotnet run --project (Join-Path $repo 'src/BehaviorDiff.Engine') -c Release --no-build -- `
+    findings --divergences $out --frontier $report --out $findings --exit-code $findingsExit `
+    --base-sha proof-base --pr-sha proof-pr --merge-base proof-merge-base
+
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$document = Get-Content $findings -Raw | ConvertFrom-Json
+if ($document.status -ne 'analyzed') { throw "findings status is $($document.status), expected analyzed" }
+if ($document.members.Count -lt 1) { throw 'analyzed findings has no member evidence' }
+if ($document.members[0].callSiteCount -lt 1) { throw 'member rollup has no call sites' }
+if ($document.members[0].evidence.Count -lt 1) { throw 'member has no per-member evidence' }
+Write-Host "  $($document.summary.unexpectedMembers) unexpected member(s), $($document.summary.unexpectedCallSites) call site(s)"
+Write-Host "  first member evidence count: $($document.members[0].evidence.Count)"
+Write-Host 'findings.json analyzed arm: PASS' -ForegroundColor Green
+
+exit 0

@@ -92,30 +92,15 @@ public static class BehaviorDiffTools
         """)]
     public static string ListDivergences(string runId, string category = "unexpected", int? limit = null)
     {
-        if (Guard(runId, out string? guard, out JsonDocument? frontier) is false)
+        if (Guard(runId, out string? guard, out JsonDocument? findings) is false)
         {
             return guard!;
         }
 
         string wanted = category.ToLowerInvariant();
-        var nodes = Nodes(frontier!)
-            .Where(n => wanted == "all" || Attribution(n).Equals(wanted, StringComparison.OrdinalIgnoreCase))
-            .ToList();
-
-        var members = nodes
-            .GroupBy(n => Str(n, "methodFullName"))
-            .OrderByDescending(g => g.Count())
-            .Select(g => new
-            {
-                member = g.Key,
-                attribution = Attribution(g.First()).ToLowerInvariant(),
-                file = Str(g.First(), "filePath"),
-                source_generated = IsGenerated(Str(g.First(), "filePath")),
-                call_sites = g.Count(),
-                distinct_tests = g.Select(n => Str(n, "testId")).Distinct(StringComparer.Ordinal).Count(),
-                verified = Str(g.First(), "classification") == "frontier",
-                symptoms = g.SelectMany(Symptoms).Distinct(StringComparer.Ordinal).Take(4).ToArray(),
-            })
+        var members = Members(findings!)
+            .Where(member => wanted == "all" || Str(member, "attribution").Equals(wanted, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(member => Int(member, "callSiteCount"))
             .ToList();
 
         int cap = Math.Min(limit ?? MemberCap, MemberCap);
@@ -125,13 +110,24 @@ public static class BehaviorDiffTools
         {
             category = wanted,
             total_members = members.Count,
-            total_call_sites = nodes.Count,
+            total_call_sites = members.Sum(member => Int(member, "callSiteCount")),
             returned = Math.Min(cap, members.Count),
             truncated,
             truncation_note = truncated
                 ? $"Showing {cap} of {members.Count} members, ordered by call-site count. Narrow by category or raise limit (max {MemberCap})."
                 : null,
-            members = members.Take(cap),
+            members = members.Take(cap).Select(member => new
+            {
+                member = Str(member, "memberName"),
+                attribution = Str(member, "attribution"),
+                file = NullableStr(member, "filePath"),
+                line = NullableInt(member, "line"),
+                source_generated = Bool(member, "sourceGenerated"),
+                call_sites = Int(member, "callSiteCount"),
+                distinct_tests = Int(member, "distinctTestCount"),
+                verified = Bool(member, "verified"),
+                symptoms = Strings(member, "symptoms").Take(4).ToArray(),
+            }),
         });
     }
 
@@ -148,63 +144,35 @@ public static class BehaviorDiffTools
         """)]
     public static string GetDivergence(string runId, string memberName)
     {
-        if (Guard(runId, out string? guard, out JsonDocument? frontier) is false)
+        if (Guard(runId, out string? guard, out JsonDocument? findings) is false)
         {
             return guard!;
         }
 
-        var matching = Nodes(frontier!).Where(n => Str(n, "methodFullName") == memberName).ToList();
-        if (matching.Count == 0)
+        JsonElement? matching = Members(findings!).FirstOrDefault(member => Str(member, "memberName") == memberName);
+        if (matching is null || matching.Value.ValueKind == JsonValueKind.Undefined)
         {
             return Fail("no member '" + memberName + "' in run " + runId + "; call list_divergences first");
         }
 
-        JsonDocument? set = RunStore.LoadArtifact(runId, "divergence-set.json");
-        var observations = new List<object>();
-        if (set is not null && set.RootElement.TryGetProperty("divergences", out JsonElement divs))
-        {
-            foreach (JsonElement d in divs.EnumerateArray())
-            {
-                if (Str(d, "methodFullName") != memberName)
-                {
-                    continue;
-                }
-
-                observations.Add(new
-                {
-                    test = Str(d, "testId"),
-                    kind = Str(d, "kind"),
-                    detail = Str(d, "detail"),
-                    digest_confidence = Str(d, "digestConfidence"),
-                    base_args = Str(d, "baseArgsRendered"),
-                    pr_args = Str(d, "prArgsRendered"),
-                    base_return = Str(d, "baseReturnRendered"),
-                    pr_return = Str(d, "prReturnRendered"),
-                });
-
-                if (observations.Count >= ObservationCap)
-                {
-                    break;
-                }
-            }
-        }
-
-        JsonElement first = matching[0];
+        JsonElement member = matching.Value;
+        JsonElement[] observations = member.TryGetProperty("evidence", out JsonElement evidence)
+            ? evidence.EnumerateArray().Take(ObservationCap).ToArray()
+            : Array.Empty<JsonElement>();
         return JsonSerializer.Serialize(new
         {
             member = memberName,
-            attribution = Attribution(first).ToLowerInvariant(),
-            file = Str(first, "filePath"),
-            source_generated = IsGenerated(Str(first, "filePath")),
-            source_generated_note = IsGenerated(Str(first, "filePath"))
-                ? "This member is emitted by a source generator into obj/. No git diff will name that file, so it cannot be attributed to the pull request by path."
-                : null,
-            call_sites = matching.Count,
-            descendants_compared = matching.Sum(n => Int(n, "descendantKeysCompared")),
-            verified = Str(first, "classification") == "frontier",
-            downgrade_reasons = matching.SelectMany(DowngradeReasons).Distinct(StringComparer.Ordinal).ToArray(),
+            attribution = Str(member, "attribution"),
+            file = NullableStr(member, "filePath"),
+            line = NullableInt(member, "line"),
+            source_generated = Bool(member, "sourceGenerated"),
+            source_generated_note = NullableStr(member, "sourceGeneratedNote"),
+            call_sites = Int(member, "callSiteCount"),
+            descendants_compared = Int(member, "descendantsCompared"),
+            verified = Bool(member, "verified"),
+            downgrade_reasons = Strings(member, "downgradeReasons").ToArray(),
             observations,
-            observations_note = observations.Count == 0
+            observations_note = observations.Length == 0
                 ? "The engine records no per-observation values for this kind of finding; a member that exists on only one side has no counterpart to compare."
                 : null,
             git_diff_hunks = "not available: the engine does not emit diff hunks. Read the file at the path above.",
@@ -285,20 +253,19 @@ public static class BehaviorDiffTools
         """)]
     public static string GetUntestedDivergences(string runId)
     {
-        if (Guard(runId, out string? guard, out JsonDocument? frontier) is false)
+        if (Guard(runId, out string? guard, out JsonDocument? findings) is false)
         {
             return guard!;
         }
 
-        var untested = Nodes(frontier!)
-            .Where(n => n.TryGetProperty("untested", out JsonElement u) && u.ValueKind == JsonValueKind.True)
-            .GroupBy(n => Str(n, "methodFullName"))
-            .Select(g => new
+        var untested = Members(findings!)
+            .Where(member => Int(member, "untestedCallSiteCount") > 0)
+            .Select(member => new
             {
-                member = g.Key,
-                attribution = Attribution(g.First()).ToLowerInvariant(),
-                file = Str(g.First(), "filePath"),
-                call_sites = g.Count(),
+                member = Str(member, "memberName"),
+                attribution = Str(member, "attribution"),
+                file = NullableStr(member, "filePath"),
+                call_sites = Int(member, "untestedCallSiteCount"),
             })
             .OrderByDescending(m => m.call_sites)
             .Take(MemberCap)
@@ -312,9 +279,9 @@ public static class BehaviorDiffTools
         });
     }
 
-    private static bool Guard(string runId, out string? failure, out JsonDocument? frontier)
+    private static bool Guard(string runId, out string? failure, out JsonDocument? findings)
     {
-        frontier = null;
+        findings = null;
         RunRecord? record = RunStore.Load(runId);
         if (record is null)
         {
@@ -322,26 +289,27 @@ public static class BehaviorDiffTools
             return false;
         }
 
-        // A refusal must never surface as an empty list: an agent reading an empty list will report the
-        // pull request as safe, which is the exact failure this project exists to prevent.
-        if (record.Status is "refused" or "failed")
+        findings = RunStore.LoadArtifact(runId, "findings.json");
+        if (findings is null)
         {
-            failure = Fail("could not analyze this pull request (" + record.Status + "): "
-                + (record.Error ?? "no reason recorded")
+            failure = Fail("run " + runId + " has no findings.json. This is not a clean result and must not be reported as one.");
+            return false;
+        }
+
+        string status = Str(findings.RootElement, "status");
+        if (status is "refused" or "failed")
+        {
+            string reason = findings.RootElement.TryGetProperty("refusal", out JsonElement refusal)
+                ? Str(refusal, "reason")
+                : "no reason recorded";
+            failure = Fail("could not analyze this pull request (" + status + "): " + reason
                 + ". This is not a clean result and must not be reported as one.");
             return false;
         }
 
-        if (record.Status != "complete")
+        if (status != "analyzed")
         {
-            failure = Fail("run " + runId + " is " + record.Status + " (" + record.Phase + "); poll get_run_status until it is complete");
-            return false;
-        }
-
-        frontier = RunStore.LoadArtifact(runId, "frontier-report.json");
-        if (frontier is null)
-        {
-            failure = Fail("run " + runId + " reports complete but produced no frontier report");
+            failure = Fail("run " + runId + " has unknown findings status '" + status + "'");
             return false;
         }
 
@@ -349,16 +317,10 @@ public static class BehaviorDiffTools
         return true;
     }
 
-    private static IEnumerable<JsonElement> Nodes(JsonDocument frontier) =>
-        frontier.RootElement.TryGetProperty("frontier", out JsonElement f) && f.ValueKind == JsonValueKind.Array
-            ? f.EnumerateArray()
+    private static IEnumerable<JsonElement> Members(JsonDocument findings) =>
+        findings.RootElement.TryGetProperty("members", out JsonElement members) && members.ValueKind == JsonValueKind.Array
+            ? members.EnumerateArray()
             : Enumerable.Empty<JsonElement>();
-
-    private static string Attribution(JsonElement node) => Str(node, "attribution");
-
-    private static IEnumerable<string> Symptoms(JsonElement node) => Strings(node, "symptoms");
-
-    private static IEnumerable<string> DowngradeReasons(JsonElement node) => Strings(node, "downgradeReasons");
 
     private static IEnumerable<string> Strings(JsonElement node, string name) =>
         node.TryGetProperty(name, out JsonElement a) && a.ValueKind == JsonValueKind.Array
@@ -370,10 +332,25 @@ public static class BehaviorDiffTools
             ? v.GetString() ?? string.Empty
             : string.Empty;
 
+    private static string? NullableStr(JsonElement node, string name) =>
+        node.TryGetProperty(name, out JsonElement value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null;
+
     private static int Int(JsonElement node, string name) =>
         node.TryGetProperty(name, out JsonElement v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out int i)
             ? i
             : 0;
+
+    private static int? NullableInt(JsonElement node, string name) =>
+        node.TryGetProperty(name, out JsonElement value)
+        && value.ValueKind == JsonValueKind.Number
+        && value.TryGetInt32(out int number)
+            ? number
+            : null;
+
+    private static bool Bool(JsonElement node, string name) =>
+        node.TryGetProperty(name, out JsonElement value) && value.ValueKind == JsonValueKind.True;
 
     /// <summary>
     /// Call ids are written as numbers by some engine versions and as strings by others.
@@ -394,10 +371,6 @@ public static class BehaviorDiffTools
             _ => false,
         };
     }
-
-    private static bool IsGenerated(string? path) =>
-        !string.IsNullOrEmpty(path)
-        && (path!.Contains("/obj/", StringComparison.Ordinal) || path.EndsWith(".g.cs", StringComparison.Ordinal));
 
     private static string Fail(string reason) =>
         JsonSerializer.Serialize(new { error = reason, is_clean_result = false });

@@ -15,6 +15,7 @@ namespace BehaviorDiff.Cli
             string? prRef = null;
             string? ciProvider = null;
             string? work = null;
+            string? findings = null;
             bool keep = false;
             var positional = new List<string>();
 
@@ -26,6 +27,7 @@ namespace BehaviorDiff.Cli
                     case "--pr": prRef = Next(args, ref i); break;
                     case "--ci": ciProvider = Next(args, ref i); break;
                     case "--work": work = Next(args, ref i); break;
+                    case "--findings": findings = Next(args, ref i); break;
                     case "--keep": keep = true; break;
                     case "-h":
                     case "--help":
@@ -54,16 +56,35 @@ namespace BehaviorDiff.Cli
 
             string workDirectory = work ?? Path.Combine(
                 Path.GetTempPath(), "behaviordiff", DateTime.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture));
+            string findingsPath = findings ?? Path.Combine(workDirectory, "findings.json");
+            Pipeline? pipeline = null;
 
             try
             {
                 string resolvedRepository = RefResolution.ResolveRepository(repo, ciProvider);
-                return new Pipeline(resolvedRepository, baseRef, prRef, ciProvider, workDirectory, keep).Run();
+                pipeline = new Pipeline(
+                    resolvedRepository,
+                    baseRef,
+                    prRef,
+                    ciProvider,
+                    workDirectory,
+                    findingsPath,
+                    keep);
+                return pipeline.Run();
             }
             catch (CliException ex)
             {
                 Console.Error.WriteLine();
                 Console.Error.WriteLine("FAILED: " + ex.Message);
+                ResolvedRefs? refs = pipeline?.ResolvedRefs;
+                FindingsCommand.WriteInvalid(
+                    findingsPath,
+                    ex.ExitCode == ExitCodes.RunInvalid ? "refused" : "failed",
+                    ex.ExitCode,
+                    ex.Message,
+                    refs?.BaseSha,
+                    refs?.PrSha,
+                    refs?.MergeBaseSha);
                 return ex.ExitCode;
             }
         }
@@ -80,8 +101,8 @@ namespace BehaviorDiff.Cli
 
         private static void Usage()
         {
-            Console.WriteLine("usage: behaviordiff <repo> --base <ref> --pr <ref> [--work <dir>] [--keep]");
-            Console.WriteLine("       behaviordiff [<repo>] --ci=azuredevops [--work <dir>] [--keep]");
+            Console.WriteLine("usage: behaviordiff <repo> --base <ref> --pr <ref> [--work <dir>] [--findings <file>] [--keep]");
+            Console.WriteLine("       behaviordiff [<repo>] --ci=azuredevops [--work <dir>] [--findings <file>] [--keep]");
             Console.WriteLine();
             Console.WriteLine("  exit 0  analyzed, no unexpected divergences");
             Console.WriteLine("  exit 1  analyzed, unexpected divergences found");
@@ -98,7 +119,10 @@ namespace BehaviorDiff.Cli
         private readonly string? _prRef;
         private readonly string? _ciProvider;
         private readonly string _work;
+        private readonly string _findings;
         private readonly bool _keep;
+
+        internal ResolvedRefs? ResolvedRefs { get; private set; }
 
         internal Pipeline(
             string repo,
@@ -106,6 +130,7 @@ namespace BehaviorDiff.Cli
             string? prRef,
             string? ciProvider,
             string work,
+            string findings,
             bool keep)
         {
             _repo = repo;
@@ -113,6 +138,7 @@ namespace BehaviorDiff.Cli
             _prRef = prRef;
             _ciProvider = ciProvider;
             _work = work;
+            _findings = findings;
             _keep = keep;
         }
 
@@ -129,6 +155,7 @@ namespace BehaviorDiff.Cli
             }
 
             ResolvedRefs refs = RefResolution.Resolve(_repo, _baseRef, _prRef, _ciProvider);
+            ResolvedRefs = refs;
             Console.WriteLine("  base       : " + refs.BaseLabel + " -> " + refs.BaseSha);
             Console.WriteLine("  pr         : " + refs.PrLabel + " -> " + refs.PrSha);
             Console.WriteLine("  merge base : " + refs.MergeBaseSha);
@@ -206,16 +233,27 @@ namespace BehaviorDiff.Cli
                 Console.WriteLine();
                 Console.WriteLine("=== 9. engine part 1 ===");
                 string divergenceSet = Path.Combine(_work, "divergence-set.json");
-                if (DiffCommand.Run(new DiffOptions
+                var diffOptions = new DiffOptions
                 {
                     Base1 = base1,
                     Base2 = base2,
                     Pr = pr,
                     BaseRoot = baseTree,
                     PrRoot = prTree,
+                    ChangedFiles = changedList,
                     Output = divergenceSet,
-                }) != 0)
+                };
+                if (DiffCommand.Run(diffOptions) != 0)
                 {
+                    string reason = diffOptions.RefusalReason ?? "The comparison was refused before a DivergenceSet was produced.";
+                    FindingsCommand.WriteInvalid(
+                        _findings,
+                        "refused",
+                        ExitCodes.RunInvalid,
+                        reason,
+                        refs.BaseSha,
+                        refs.PrSha,
+                        refs.MergeBaseSha);
                     Console.WriteLine();
                     Console.WriteLine("RESULT: COULD NOT ANALYZE. The comparison was refused before any finding was produced;");
                     Console.WriteLine("        this is not a statement that the PR is clean.");
@@ -225,19 +263,38 @@ namespace BehaviorDiff.Cli
                 Console.WriteLine();
                 Console.WriteLine("=== 10. engine part 2 ===");
                 string report = Path.Combine(_work, "frontier-report.json");
-                if (FrontierCommand.Run(new FrontierOptions
+                var frontierOptions = new FrontierOptions
                 {
                     Input = divergenceSet,
                     ChangedFiles = changedList,
                     Output = report,
-                }) != 0)
+                };
+                if (FrontierCommand.Run(frontierOptions) != 0)
                 {
+                    string reason = frontierOptions.RefusalReason ?? "Frontier detection was refused before a report was produced.";
+                    FindingsCommand.WriteInvalid(
+                        _findings,
+                        "refused",
+                        ExitCodes.RunInvalid,
+                        reason,
+                        refs.BaseSha,
+                        refs.PrSha,
+                        refs.MergeBaseSha);
                     Console.WriteLine();
                     Console.WriteLine("RESULT: COULD NOT ANALYZE. Frontier detection was refused; no verdict was produced.");
                     return ExitCodes.RunInvalid;
                 }
 
-                return Summarize(report);
+                int exitCode = Summarize(report);
+                FindingsCommand.WriteAnalyzed(
+                    divergenceSet,
+                    report,
+                    _findings,
+                    exitCode,
+                    refs.BaseSha,
+                    refs.PrSha,
+                    refs.MergeBaseSha);
+                return exitCode;
             }
             finally
             {

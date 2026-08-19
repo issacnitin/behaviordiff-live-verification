@@ -51,14 +51,19 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'CLI build failed' }
 
     Write-Host '=== explicit refs remain the default ===' -ForegroundColor Cyan
-    $explicitOutput = dotnet run --project $cli -c Release --no-build -- $fixture --base refs/heads/target --pr refs/heads/source 2>&1
+    $failedFindings = Join-Path $fixture 'failed-findings.json'
+    $explicitOutput = dotnet run --project $cli -c Release --no-build -- $fixture --base refs/heads/target --pr refs/heads/source --findings $failedFindings 2>&1
     $explicitExit = $LASTEXITCODE
     $explicitText = $explicitOutput -join "`n"
     $explicitOutput | Select-Object -First 9
     if ($explicitExit -ne 4) { throw "explicit path expected the later no-test-project refusal (4), got $explicitExit" }
     if ($explicitText -notmatch 'changed from merge base: 2') { throw 'explicit path did not use the merge base' }
     if ($explicitText -match 'CI provider') { throw 'explicit path unexpectedly entered CI resolution' }
+    $failedDocument = Get-Content $failedFindings -Raw | ConvertFrom-Json
+    if ($failedDocument.status -ne 'failed' -or $failedDocument.isCleanResult -ne $false) { throw 'failed findings arm is not structurally invalid' }
+    if ($null -ne $failedDocument.members) { throw 'failed findings must omit members rather than serialize an empty array' }
     Write-Host 'PASS: explicit <repo> --base <ref> --pr <ref> remains the default' -ForegroundColor Green
+    Write-Host 'PASS: failed findings has no members arm and isCleanResult=false' -ForegroundColor Green
 
     Write-Host ''
 
@@ -92,13 +97,19 @@ try {
     Write-Host ''
     Write-Host '=== plausibility guard ===' -ForegroundColor Cyan
     $env:BEHAVIORDIFF_MAX_CHANGED_FILES = '1'
-    $guardOutput = dotnet run --project $cli -c Release --no-build -- --ci=azuredevops 2>&1
+    $refusedFindings = Join-Path $fixture 'refused-findings.json'
+    $guardOutput = dotnet run --project $cli -c Release --no-build -- --ci=azuredevops --findings $refusedFindings 2>&1
     $guardExit = $LASTEXITCODE
     $guardText = $guardOutput -join "`n"
     $guardOutput | Select-Object -Last 8
     if ($guardExit -ne 3) { throw "plausibility guard expected exit 3, got $guardExit" }
     if ($guardText -notmatch 'IMPLAUSIBLE CHANGED-FILE SET') { throw 'guard did not explain the refusal' }
+    $refusedDocument = Get-Content $refusedFindings -Raw | ConvertFrom-Json
+    if ($refusedDocument.status -ne 'refused' -or $refusedDocument.isCleanResult -ne $false) { throw 'refused findings arm is not structurally invalid' }
+    if ($null -ne $refusedDocument.members) { throw 'refused findings must omit members rather than serialize an empty array' }
+    if ($refusedDocument.refusal.reason -notmatch 'IMPLAUSIBLE CHANGED-FILE SET') { throw 'refusal reason was not preserved in findings' }
     Write-Host 'PASS: 1-commit/2-file PR refused against an explicit limit of 1' -ForegroundColor Green
+    Write-Host 'PASS: refusal is structurally distinct from clean and preserves its reason' -ForegroundColor Green
 }
 finally {
     Pop-Location

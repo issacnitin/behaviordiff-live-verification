@@ -10,7 +10,7 @@ $mcp = Join-Path $repo 'src/BehaviorDiff.Mcp'
 $runsRoot = Join-Path ([System.IO.Path]::GetTempPath()) 'behaviordiff-mcp-runs'
 $source = Join-Path ([System.IO.Path]::GetTempPath()) 'behaviordiff-diff'
 
-foreach ($f in 'divergence-set.json', 'frontier-report.json') {
+foreach ($f in 'findings.json', 'divergence-set.json') {
     if (-not (Test-Path (Join-Path $source $f))) {
         throw "missing $f in $source - run: pwsh tools/verify-diff.ps1 -Mutate -Change config"
     }
@@ -20,8 +20,8 @@ Remove-Item $runsRoot -Recurse -Force -ErrorAction SilentlyContinue
 $runId = 'proof-sampleapp'
 $runDir = Join-Path $runsRoot $runId
 New-Item -ItemType Directory -Path $runDir -Force | Out-Null
+Copy-Item (Join-Path $source 'findings.json') $runDir
 Copy-Item (Join-Path $source 'divergence-set.json') $runDir
-Copy-Item (Join-Path $source 'frontier-report.json') $runDir
 @{
     runId = $runId; status = 'complete'; phase = 'done'; progress = 100
     repoPath = $repo; baseRef = 'HEAD'; prRef = 'mutated'; exitCode = 1

@@ -14,6 +14,8 @@ namespace BehaviorDiff.Engine
         internal string ChangedFiles { get; set; } = string.Empty;
 
         internal string Output { get; set; } = string.Empty;
+
+        internal string? RefusalReason { get; set; }
     }
 
     internal sealed class FrontierNode
@@ -23,6 +25,8 @@ namespace BehaviorDiff.Engine
         internal string MethodFullName { get; init; } = string.Empty;
 
         internal string? FilePath { get; init; }
+
+        internal int? Line { get; init; }
 
         internal bool Verified { get; set; }
 
@@ -188,6 +192,9 @@ namespace BehaviorDiff.Engine
                     TestId = first.TestId,
                     MethodFullName = first.MethodFullName,
                     FilePath = first.FilePath,
+                    Line = set.CallTree.FirstOrDefault(call =>
+                        string.Equals(call.TestId, first.TestId, StringComparison.Ordinal)
+                        && string.Equals(call.MethodFullName, first.MethodFullName, StringComparison.Ordinal))?.Line,
                 };
 
                 foreach (DivergenceDto entry in entries.OrderBy(e => e.Kind, StringComparer.Ordinal))
@@ -394,6 +401,7 @@ namespace BehaviorDiff.Engine
 
             if (refusals.Count > 0)
             {
+                options.RefusalReason = string.Join(Environment.NewLine, refusals);
                 Console.WriteLine();
                 Console.Error.WriteLine("REFUSED to emit a frontier report.");
                 foreach (string refusal in refusals)
@@ -625,6 +633,7 @@ namespace BehaviorDiff.Engine
             testId = node.TestId,
             methodFullName = node.MethodFullName,
             filePath = node.FilePath,
+            line = node.Line,
             symptoms = node.Symptoms,
             downgradeReasons = node.DowngradeReasons,
             descendantKeysCompared = node.DescendantKeys,
