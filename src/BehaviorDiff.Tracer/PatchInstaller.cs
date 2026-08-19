@@ -414,7 +414,7 @@ namespace BehaviorDiff.Tracer
             ReturnKind kind = MethodSelector.ClassifyReturn(member);
             bool isTestRoot = MethodSelector.IsTestRoot(member, _options.TestAttributeNames);
             ParameterInfo[] parameters = member.GetParameters();
-            string fullName = BuildFullName(member, parameters);
+            string fullName = MethodSelector.BuildFullName(member, parameters);
 
             MethodInfo postfix;
             try
@@ -569,26 +569,6 @@ namespace BehaviorDiff.Tracer
                 + "effect on a retail runtime. Set " + JitMinOptsVariable + "=1 before starting the process.");
         }
 
-        private static string BuildFullName(MethodBase member, ParameterInfo[] parameters)
-        {
-            var builder = new StringBuilder(96);
-            Type? declaring = member.DeclaringType;
-            builder.Append(declaring?.FullName ?? "<unknown>").Append('.').Append(member.Name).Append('(');
-
-            for (int i = 0; i < parameters.Length; i++)
-            {
-                if (i > 0)
-                {
-                    builder.Append(',');
-                }
-
-                Type parameterType = parameters[i].ParameterType;
-                builder.Append(parameterType.FullName ?? parameterType.Name);
-            }
-
-            return builder.Append(')').ToString();
-        }
-
         private void RecordMember(ManifestEntry entry)
         {
             lock (_recordGate)
@@ -602,7 +582,7 @@ namespace BehaviorDiff.Tracer
             RecordMember(new ManifestEntry
             {
                 Assembly = assemblyName,
-                MethodFullName = BuildFullName(member, member.GetParameters()),
+                MethodFullName = MethodSelector.BuildFullName(member, member.GetParameters()),
                 Status = PatchStatus.Skipped,
                 SkipReason = reason.ToString(),
             });

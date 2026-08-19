@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Threading.Tasks;
 
 namespace BehaviorDiff.Tracer
@@ -394,6 +395,30 @@ namespace BehaviorDiff.Tracer
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// The engine's join key, and the key step 5 compares method sets on. Both instrumentation backends
+        /// must call this one implementation: a formatting difference reads downstream as total scope loss.
+        /// </summary>
+        internal static string BuildFullName(MethodBase member, ParameterInfo[] parameters)
+        {
+            var builder = new StringBuilder(96);
+            Type? declaring = member.DeclaringType;
+            builder.Append(declaring?.FullName ?? "<unknown>").Append('.').Append(member.Name).Append('(');
+
+            for (int i = 0; i < parameters.Length; i++)
+            {
+                if (i > 0)
+                {
+                    builder.Append(',');
+                }
+
+                Type parameterType = parameters[i].ParameterType;
+                builder.Append(parameterType.FullName ?? parameterType.Name);
+            }
+
+            return builder.Append(')').ToString();
         }
     }
 }
