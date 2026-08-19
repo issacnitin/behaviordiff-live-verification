@@ -74,6 +74,7 @@ namespace BehaviorDiff.Cli
 
             string workDirectory = work ?? Path.Combine(
                 Path.GetTempPath(), "behaviordiff", DateTime.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture));
+            workDirectory = Path.GetFullPath(workDirectory);
             string findingsPath = findings ?? Path.Combine(workDirectory, "findings.json");
             Pipeline? pipeline = null;
 
