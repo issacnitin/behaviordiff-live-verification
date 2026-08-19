@@ -110,6 +110,22 @@ The posting gate defaults to `warn-only`. Set the pipeline variable `behaviorDif
 `fail-on-findings` only after the signal is trusted. A refusal posts a prominent non-verdict and stays
 nonblocking; it is never converted into an empty finding list.
 
+GitHub comments always include deterministic evidence for each unexpected member: up to three rendered
+base/PR observations with arguments, the exact base and PR call paths, per-test assertion reaction,
+source location, and any edited files present on those paths. The member detail is collapsed so the
+summary remains scannable. GitHub cannot anchor review comments on files outside the PR diff, which is
+why this evidence is retained in the summary comment.
+
+Model explanation is optional. A trusted posting process may set `ANTHROPIC_API_KEY` to request one
+Anthropic Messages API explanation per unexpected member; without that variable, no model request is
+made. Do not expose a persistent model credential to a `pull_request` job that builds code from the PR;
+the included workflow deliberately does not do so. The request includes only the member evidence and
+the PR's changed-file diff hunks. BehaviorDiff posts the response below the deterministic evidence only
+when it contains the observed values, member name, and a changed identifier selected from the supplied
+hunk, and both claims carry exact citations copied from the supplied observation/diff corpus. An
+unavailable API or rejected response does not change the deterministic finding. See both complete config-parser renderings in
+[`evidence/CONFIG-PARSER-COMMENTS.md`](evidence/CONFIG-PARSER-COMMENTS.md).
+
 The GitHub path was verified on public PR
 [`issacnitin/behaviordiff-live-verification#1`](https://github.com/issacnitin/behaviordiff-live-verification/pull/1).
 The final coverage-aware hosted run took 37.14 seconds inside BehaviorDiff, peaked at 224,264 KB RSS,
@@ -183,7 +199,8 @@ pwsh -File tools/verify-null-task.ps1        # the null-Task path emits exactly 
 pwsh -File tools/verify-diff.ps1 -Mutate -Change config
 pwsh -File tools/verify-ci-refs.ps1          # merge-base refs and invalid findings arms
 pwsh -File tools/verify-github-refs.ps1      # event SHAs and shallow-clone refusal
-pwsh -File tools/verify-coverage.ps1         # per-file execution coverage and zero-row honesty
+pwsh -File tools/verify-coverage.ps1         # values, paths, assertion reaction, and coverage honesty
+pwsh -File tools/verify-anthropic.ps1        # one request/member and grounded-output rejection
 pwsh -File tools/verify-mcp.ps1              # MCP reads canonical findings.json
 pwsh -File tools/verify-ado-post.ps1         # local ADO REST contract and idempotency
 pwsh -File tools/verify-pipeline.ps1         # mocked end-to-end CI seams

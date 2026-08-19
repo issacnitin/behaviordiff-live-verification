@@ -66,6 +66,8 @@ namespace BehaviorDiff.Engine
 
         [JsonPropertyName("filePath")] public string? FilePath { get; set; }
 
+        [JsonPropertyName("ordinal")] public int? Ordinal { get; set; }
+
         [JsonPropertyName("kind")] public string Kind { get; set; } = string.Empty;
 
         [JsonPropertyName("detail")] public string Detail { get; set; } = string.Empty;
@@ -136,6 +138,8 @@ namespace BehaviorDiff.Engine
         [JsonPropertyName("testId")] public string TestId { get; set; } = string.Empty;
 
         [JsonPropertyName("methodFullName")] public string MethodFullName { get; set; } = string.Empty;
+
+        [JsonPropertyName("ordinal")] public int? Ordinal { get; set; }
 
         [JsonPropertyName("isHarness")] public bool IsHarness { get; set; }
 

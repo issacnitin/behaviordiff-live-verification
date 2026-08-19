@@ -18,7 +18,19 @@ namespace BehaviorDiff.Cli
     {
         // Current GitHub.com REST version documented on 2026-08-19.
         private const string ApiVersion = "2026-03-10";
+        private const int MaxCommentLength = 60000;
+        private const int MemberEvidenceBudget = 56000;
         private readonly JsonSerializerOptions _json = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+        private readonly HttpMessageHandler? _gitHubHandler;
+        private readonly Func<string, AnthropicExplainer> _explainerFactory;
+
+        internal GitHubPoster(
+            HttpMessageHandler? gitHubHandler = null,
+            Func<string, AnthropicExplainer>? explainerFactory = null)
+        {
+            _gitHubHandler = gitHubHandler;
+            _explainerFactory = explainerFactory ?? (apiKey => new AnthropicExplainer(apiKey));
+        }
 
         internal async Task PostAsync(JsonElement findings)
         {
@@ -35,7 +47,7 @@ namespace BehaviorDiff.Cli
             string api = Environment.GetEnvironmentVariable("GITHUB_API_URL") ?? "https://api.github.com";
             string root = api.TrimEnd('/') + "/repos/" + context.Repository;
 
-            using var client = new HttpClient();
+            using var client = _gitHubHandler is null ? new HttpClient() : new HttpClient(_gitHubHandler, disposeHandler: false);
             client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
             client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
             client.DefaultRequestHeaders.Add("X-GitHub-Api-Version", ApiVersion);
@@ -49,8 +61,23 @@ namespace BehaviorDiff.Cli
                 client,
                 root + "/pulls/" + context.PullRequestNumber + "/comments?per_page=100",
                 "body").ConfigureAwait(false);
+            IReadOnlyDictionary<string, ModelExplanation> explanations =
+                new Dictionary<string, ModelExplanation>(StringComparer.Ordinal);
 
             var anchorFailures = new List<string>();
+            string summaryMarker = "<!-- behaviordiff:github:pr:" + context.PullRequestNumber + ":summary -->";
+            long summaryCommentId = await UpsertIssueComment(
+                client,
+                root,
+                context.PullRequestNumber,
+                issueComments,
+                summaryMarker,
+                RenderSummary(findings, summaryMarker, anchorFailures, explanations)).ConfigureAwait(false);
+            if (!issueComments.Any(comment => comment.Body.Contains(summaryMarker, StringComparison.Ordinal)))
+            {
+                issueComments.Add(new ExistingComment(summaryCommentId, summaryMarker));
+            }
+
             if (String(findings, "status") == "analyzed"
                 && findings.TryGetProperty("members", out JsonElement members))
             {
@@ -74,7 +101,12 @@ namespace BehaviorDiff.Cli
                             context,
                             reviewComments,
                             marker,
-                            RenderMember(member, marker),
+                            RenderMember(
+                                member,
+                                marker,
+                                explanations.TryGetValue(String(member, "memberName"), out ModelExplanation? explanation)
+                                    ? explanation
+                                    : null),
                             filePath,
                             line.Value).ConfigureAwait(false);
                     }
@@ -83,25 +115,47 @@ namespace BehaviorDiff.Cli
                         // GitHub review comments can only target a line in the unified PR diff. An
                         // UNEXPECTED file is normally absent from that diff by definition. Preserve the
                         // platform refusal in the summary rather than suppressing the finding or the post.
-                        anchorFailures.Add(filePath + ":" + line.Value + " - GitHub REST "
-                            + (int)ex.StatusCode + " " + ex.StatusCode + ": " + ex.Response);
+                        anchorFailures.Add(filePath + ":" + line.Value);
+                        Console.WriteLine("  GitHub line comment not created: " + filePath + ":" + line.Value
+                            + " - GitHub REST " + (int)ex.StatusCode + " " + ex.StatusCode + ": " + ex.Response);
                     }
                 }
             }
 
-            string summaryMarker = "<!-- behaviordiff:github:pr:" + context.PullRequestNumber + ":summary -->";
-            await UpsertIssueComment(
-                client,
-                root,
-                context.PullRequestNumber,
-                issueComments,
-                summaryMarker,
-                RenderSummary(findings, summaryMarker, anchorFailures)).ConfigureAwait(false);
-
-            foreach (string failure in anchorFailures)
+            if (anchorFailures.Count > 0)
             {
-                Console.WriteLine("  GitHub line comment not created: " + failure);
+                await UpsertIssueComment(
+                    client,
+                    root,
+                    context.PullRequestNumber,
+                    issueComments,
+                    summaryMarker,
+                    RenderSummary(findings, summaryMarker, anchorFailures, explanations)).ConfigureAwait(false);
             }
+
+            try
+            {
+                explanations = await ExplainUnexpectedMembers(
+                    client,
+                    root,
+                    context,
+                    findings).ConfigureAwait(false);
+                if (explanations.Count > 0)
+                {
+                    await UpsertIssueComment(
+                        client,
+                        root,
+                        context.PullRequestNumber,
+                        issueComments,
+                        summaryMarker,
+                        RenderSummary(findings, summaryMarker, anchorFailures, explanations)).ConfigureAwait(false);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("  Anthropic enrichment skipped after deterministic comment was posted: " + ex.Message);
+            }
+
         }
 
         private async Task<List<ExistingComment>> ListComments(
@@ -109,24 +163,124 @@ namespace BehaviorDiff.Cli
             string url,
             string bodyProperty)
         {
-            using JsonDocument response = await Send(client, HttpMethod.Get, url, body: null).ConfigureAwait(false);
             var comments = new List<ExistingComment>();
-            if (response.RootElement.ValueKind != JsonValueKind.Array)
+            for (int page = 1; ; page++)
             {
-                return comments;
-            }
+                using JsonDocument response = await Send(
+                    client,
+                    HttpMethod.Get,
+                    url + "&page=" + page,
+                    body: null).ConfigureAwait(false);
+                if (response.RootElement.ValueKind != JsonValueKind.Array)
+                {
+                    return comments;
+                }
 
-            foreach (JsonElement comment in response.RootElement.EnumerateArray())
-            {
-                comments.Add(new ExistingComment(
-                    comment.GetProperty("id").GetInt64(),
-                    String(comment, bodyProperty)));
-            }
+                JsonElement[] pageComments = response.RootElement.EnumerateArray().ToArray();
+                foreach (JsonElement comment in pageComments)
+                {
+                    comments.Add(new ExistingComment(
+                        comment.GetProperty("id").GetInt64(),
+                        String(comment, bodyProperty)));
+                }
 
-            return comments;
+                if (pageComments.Length < 100)
+                {
+                    return comments;
+                }
+            }
         }
 
-        private async Task UpsertIssueComment(
+        private async Task<IReadOnlyDictionary<string, ModelExplanation>> ExplainUnexpectedMembers(
+            HttpClient gitHubClient,
+            string root,
+            GitHubContext context,
+            JsonElement findings)
+        {
+            string? apiKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
+            if (string.IsNullOrWhiteSpace(apiKey)
+                || String(findings, "status") != "analyzed"
+                || !findings.TryGetProperty("members", out JsonElement members))
+            {
+                return new Dictionary<string, ModelExplanation>(StringComparer.Ordinal);
+            }
+
+            IReadOnlyList<ChangedFilePatch> patches = await ListChangedFilePatches(
+                gitHubClient,
+                root,
+                context.PullRequestNumber,
+                findings).ConfigureAwait(false);
+            var explanations = new Dictionary<string, ModelExplanation>(StringComparer.Ordinal);
+            using AnthropicExplainer explainer = _explainerFactory(apiKey);
+            foreach (JsonElement member in members.EnumerateArray()
+                .Where(item => String(item, "attribution") == "unexpected"))
+            {
+                string memberName = String(member, "memberName");
+                try
+                {
+                    ModelExplanation? explanation = await explainer.ExplainAsync(member, patches).ConfigureAwait(false);
+                    if (explanation is not null)
+                    {
+                        explanations[memberName] = explanation;
+                    }
+                    else
+                    {
+                        Console.WriteLine("  Anthropic explanation rejected by grounding validation: " + memberName);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("  Anthropic explanation unavailable for " + memberName + ": " + ex.Message);
+                }
+            }
+
+            return explanations;
+        }
+
+        private async Task<IReadOnlyList<ChangedFilePatch>> ListChangedFilePatches(
+            HttpClient client,
+            string root,
+            int pullRequestNumber,
+            JsonElement findings)
+        {
+            var changedFiles = new HashSet<string>(
+                findings.GetProperty("coverage").GetProperty("files").EnumerateArray()
+                    .Select(file => NullableString(file, "filePath"))
+                    .Where(path => path is not null)
+                    .Select(path => path!),
+                StringComparer.Ordinal);
+            var patches = new List<ChangedFilePatch>();
+            for (int page = 1; ; page++)
+            {
+                using JsonDocument response = await Send(
+                    client,
+                    HttpMethod.Get,
+                    root + "/pulls/" + pullRequestNumber + "/files?per_page=100&page=" + page,
+                    body: null).ConfigureAwait(false);
+                JsonElement[] files = response.RootElement.ValueKind == JsonValueKind.Array
+                    ? response.RootElement.EnumerateArray().ToArray()
+                    : Array.Empty<JsonElement>();
+                foreach (JsonElement file in files)
+                {
+                    string path = String(file, "filename");
+                    if (changedFiles.Contains(path))
+                    {
+                        patches.Add(new ChangedFilePatch(
+                            path,
+                            NullableString(file, "patch") ?? "diff hunk unavailable"));
+                    }
+                }
+
+                if (files.Length < 100)
+                {
+                    break;
+                }
+            }
+
+            return patches;
+        }
+
+        private async Task<long> UpsertIssueComment(
             HttpClient client,
             string root,
             int pullRequestNumber,
@@ -143,7 +297,7 @@ namespace BehaviorDiff.Cli
                     root + "/issues/comments/" + match.Id,
                     new { body }).ConfigureAwait(false);
                 Console.WriteLine("  updated GitHub PR summary comment " + match.Id);
-                return;
+                return match.Id;
             }
 
             using JsonDocument created = await Send(
@@ -151,7 +305,9 @@ namespace BehaviorDiff.Cli
                 HttpMethod.Post,
                 root + "/issues/" + pullRequestNumber + "/comments",
                 new { body }).ConfigureAwait(false);
-            Console.WriteLine("  created GitHub PR summary comment " + created.RootElement.GetProperty("id").GetInt64());
+            long createdId = created.RootElement.GetProperty("id").GetInt64();
+            Console.WriteLine("  created GitHub PR summary comment " + createdId);
+            return createdId;
         }
 
         private async Task UpsertReviewComment(
@@ -256,10 +412,11 @@ namespace BehaviorDiff.Cli
             }
         }
 
-        private static string RenderSummary(
+        internal static string RenderSummary(
             JsonElement findings,
             string marker,
-            IReadOnlyList<string> anchorFailures)
+            IReadOnlyList<string> anchorFailures,
+            IReadOnlyDictionary<string, ModelExplanation>? explanations = null)
         {
             var builder = new StringBuilder();
             string status = String(findings, "status");
@@ -275,7 +432,10 @@ namespace BehaviorDiff.Cli
                 builder.AppendLine("> " + reason.Replace("\n", "\n> "));
                 builder.AppendLine();
                 builder.Append(marker);
-                return builder.ToString();
+                string invalid = builder.ToString();
+                return invalid.Length <= MaxCommentLength
+                    ? invalid
+                    : RenderInvalidBudgetFallback(findings, marker, reason);
             }
 
             JsonElement summary = findings.GetProperty("summary");
@@ -300,29 +460,26 @@ namespace BehaviorDiff.Cli
                 builder.AppendLine();
                 builder.AppendLine("Unexpected means runtime behavior changed in a file the PR did not modify. That is the point of this analysis.");
                 builder.AppendLine();
-                AppendMembers(builder, findings, "unexpected", "Unexpected members");
+                AppendMembers(builder, findings, "unexpected", "Unexpected members", explanations);
             }
 
             builder.AppendLine();
             builder.AppendLine("**EXPECTED: " + Int(summary, "expectedMembers") + " member(s), across "
                 + Int(summary, "expectedCallSites") + " call site(s).**");
-            AppendMembers(builder, findings, "expected", "Expected members");
+            AppendMembers(builder, findings, "expected", "Expected members", explanations);
 
             if (anchorFailures.Count > 0)
             {
                 builder.AppendLine();
-                builder.AppendLine("### GitHub line-comment limitations");
-                builder.AppendLine("GitHub only accepts review comments on lines present in the PR diff. "
-                    + "These unexpected files were resolved locally but GitHub rejected their line anchors:");
-                foreach (string failure in anchorFailures)
-                {
-                    builder.AppendLine("- " + Escape(failure));
-                }
+                builder.AppendLine("GitHub cannot anchor review comments on outside-diff files, which is why this analysis exists.");
             }
 
             builder.AppendLine();
             builder.Append(marker);
-            return builder.ToString();
+            string rendered = builder.ToString();
+            return rendered.Length <= MaxCommentLength
+                ? rendered
+                : RenderBudgetFallback(findings, marker);
         }
 
         private static void AppendCoverage(StringBuilder builder, JsonElement findings)
@@ -347,12 +504,18 @@ namespace BehaviorDiff.Cli
             {
                 builder.AppendLine();
                 builder.AppendLine("Not exercised (no behavioral claim): "
-                    + string.Join(", ", unexercised.Select(file => "`" + NullableString(file, "filePath") + "`")) + ".");
+                    + string.Join(", ", unexercised.Take(20).Select(file => "`" + NullableString(file, "filePath") + "`"))
+                    + (unexercised.Length > 20 ? ", and " + (unexercised.Length - 20) + " more in findings.json." : "."));
                 builder.AppendLine("Zero observed calls are not evidence that these files did not change behavior.");
             }
         }
 
-        private static void AppendMembers(StringBuilder builder, JsonElement findings, string attribution, string heading)
+        private static void AppendMembers(
+            StringBuilder builder,
+            JsonElement findings,
+            string attribution,
+            string heading,
+            IReadOnlyDictionary<string, ModelExplanation>? explanations)
         {
             if (!findings.TryGetProperty("members", out JsonElement members))
             {
@@ -368,49 +531,57 @@ namespace BehaviorDiff.Cli
             }
 
             builder.AppendLine("### " + heading);
-            builder.AppendLine("| Member | Call sites | Source | Evidence |");
-            builder.AppendLine("|---|---:|---|---|");
             foreach (JsonElement member in selected)
             {
-                string source = NullableString(member, "filePath") ?? "unresolved";
-                int? line = NullableInt(member, "line");
-                if (line is not null)
+                int start = builder.Length;
+                AppendMemberEvidence(
+                    builder,
+                    member,
+                    explanations is not null
+                        && explanations.TryGetValue(String(member, "memberName"), out ModelExplanation? explanation)
+                            ? explanation
+                            : null);
+                if (builder.Length > MemberEvidenceBudget)
                 {
-                    source += ":" + line;
+                    builder.Length = start;
+                    builder.AppendLine();
+                    builder.AppendLine("- " + Code(String(member, "memberName"))
+                        + ": full deterministic evidence would exceed GitHub's comment limit; inspect findings.json in the workflow artifact.");
                 }
-
-                builder.AppendLine("| `" + Escape(String(member, "memberName")) + "` | "
-                    + Int(member, "callSiteCount") + " | `" + Escape(source) + "` | "
-                    + Escape(string.Join(", ", Strings(member, "symptoms").Take(3))) + " |");
             }
         }
 
-        private static string RenderMember(JsonElement member, string marker)
+        private static string RenderBudgetFallback(JsonElement findings, string marker)
         {
+            JsonElement summary = findings.GetProperty("summary");
+            bool clean = String(findings, "verdict") == "clean";
             var builder = new StringBuilder();
-            builder.AppendLine("### Unexpected runtime behavior change");
+            builder.AppendLine("## BehaviorDiff runtime analysis");
             builder.AppendLine();
-            builder.AppendLine("`" + String(member, "memberName") + "`");
+            builder.AppendLine(clean
+                ? "**No unexpected behavior changes were found in the observed execution.**"
+                : "**UNEXPECTED: " + Int(summary, "unexpectedMembers") + " member(s), across "
+                    + Int(summary, "unexpectedCallSites") + " call site(s).**");
             builder.AppendLine();
-            builder.AppendLine("This member is in a file the PR did **not** modify, but its runtime behavior changed.");
-            builder.AppendLine();
-            builder.AppendLine("- Call sites: " + Int(member, "callSiteCount"));
-            builder.AppendLine("- Distinct tests: " + Int(member, "distinctTestCount"));
-            builder.AppendLine("- Verified frontier: " + Bool(member, "verified").ToString().ToLowerInvariant());
-            foreach (string reason in Strings(member, "downgradeReasons").Take(2))
+            builder.AppendLine("The complete deterministic evidence exceeded GitHub's comment limit. Inspect findings.json "
+                + "in the workflow artifact. " + (clean
+                    ? "The verdict remains clean only for the observed execution and reported coverage."
+                    : "This is not a clean result."));
+            if (findings.TryGetProperty("members", out JsonElement members))
             {
-                builder.AppendLine("- Downgrade: " + reason);
-            }
-
-            if (member.TryGetProperty("evidence", out JsonElement evidence))
-            {
-                builder.AppendLine();
-                builder.AppendLine("Evidence (up to 5 observations):");
-                foreach (JsonElement observation in evidence.EnumerateArray().Take(5))
+                foreach (JsonElement member in members.EnumerateArray()
+                    .Where(item => String(item, "attribution") == "unexpected")
+                    .Take(100))
                 {
-                    builder.AppendLine("- `" + String(observation, "testId") + "`: "
-                        + RenderValue(NullableString(observation, "baseReturn"), NullableString(observation, "baseException"))
-                        + " -> " + RenderValue(NullableString(observation, "prReturn"), NullableString(observation, "prException")));
+                    string line = "- " + Code(String(member, "memberName")) + " at " + Code(Source(member))
+                        + ": " + Escape(String(member, "assertionReactionSummary"));
+                    int remaining = MaxCommentLength - builder.Length - marker.Length - (Environment.NewLine.Length * 2);
+                    if (remaining <= 0)
+                    {
+                        break;
+                    }
+
+                    builder.AppendLine(Truncate(line, remaining));
                 }
             }
 
@@ -419,8 +590,195 @@ namespace BehaviorDiff.Cli
             return builder.ToString();
         }
 
+        private static string RenderInvalidBudgetFallback(
+            JsonElement findings,
+            string marker,
+            string reason)
+        {
+            var builder = new StringBuilder();
+            builder.AppendLine("## BehaviorDiff: analysis could not complete");
+            builder.AppendLine();
+            builder.AppendLine("**No safety verdict was produced.** This is not a clean result.");
+            builder.AppendLine();
+            builder.AppendLine("> " + Truncate(reason, 2000).Replace("\n", "\n> "));
+            builder.AppendLine();
+            builder.AppendLine("The full refusal reason exceeded GitHub's comment limit; inspect findings.json in the workflow artifact.");
+            builder.AppendLine();
+            builder.Append(marker);
+            return builder.ToString();
+        }
+
+        private static void AppendMemberEvidence(
+            StringBuilder builder,
+            JsonElement member,
+            ModelExplanation? explanation)
+        {
+            string source = Source(member);
+            builder.AppendLine();
+            builder.AppendLine("<details>");
+            builder.AppendLine("<summary><code>" + WebUtility.HtmlEncode(String(member, "memberName")) + "</code> - "
+                + Int(member, "distinctTestCount") + (Int(member, "distinctTestCount") == 1 ? " test, " : " tests, ")
+                + Int(member, "callSiteCount") + (Int(member, "callSiteCount") == 1 ? " call site" : " call sites")
+                + "</summary>");
+            builder.AppendLine();
+            builder.AppendLine("**Observed values**");
+            if (member.TryGetProperty("evidence", out JsonElement evidence))
+            {
+                foreach (JsonElement observation in evidence.EnumerateArray().Take(3))
+                {
+                    builder.AppendLine("- " + RenderObservation(member, observation));
+                }
+            }
+
+            builder.AppendLine();
+            builder.AppendLine("**Tests and assertions**");
+            builder.AppendLine("- **" + Escape(String(member, "assertionReactionSummary")) + "**");
+            if (member.TryGetProperty("evidence", out evidence))
+            {
+                foreach (JsonElement observation in evidence.EnumerateArray()
+                    .GroupBy(item => String(item, "testId"), StringComparer.Ordinal)
+                    .Select(group => group.First()))
+                {
+                    string reaction = NullableBool(observation, "assertionReacted") switch
+                    {
+                        true => "an assertion reacted",
+                        false => "no assertion reacted",
+                        null => "assertion reaction was not available",
+                    };
+                    builder.AppendLine("- " + Code(String(observation, "testId")) + ": " + reaction + ".");
+                }
+            }
+
+            builder.AppendLine();
+            builder.AppendLine("**Call paths**");
+            if (member.TryGetProperty("evidence", out evidence))
+            {
+                foreach (JsonElement observation in evidence.EnumerateArray().Take(3))
+                {
+                    AppendCallPaths(builder, observation);
+                }
+            }
+
+            builder.AppendLine();
+            builder.AppendLine("**Source**");
+            builder.AppendLine("- " + Code(source));
+            builder.AppendLine();
+            builder.AppendLine("**Edited-file reachability**");
+            string[] changedFiles = Strings(member, "changedFilesReachingMember").ToArray();
+            builder.AppendLine(changedFiles.Length == 0
+                ? "- No edited file appears on these recorded test-to-member paths."
+                : "- " + string.Join(", ", changedFiles.Select(Code)));
+            if (explanation is not null)
+            {
+                builder.AppendLine();
+                builder.AppendLine("**Optional model explanation** (" + Code(explanation.Model)
+                    + ", accepted only after literal and exact-citation grounding checks)");
+                builder.AppendLine("- Why: " + explanation.Why);
+                builder.AppendLine("- Suggested test: " + explanation.Test);
+            }
+
+            builder.AppendLine();
+            builder.AppendLine("</details>");
+        }
+
+        private static string RenderObservation(JsonElement member, JsonElement observation)
+        {
+            if (NullableInt(observation, "ordinal") is not int ordinal || ordinal < 0)
+            {
+                return Code(String(observation, "testId")) + ": " + Code(String(observation, "kind"))
+                    + " - " + Escape(String(observation, "detail"))
+                    + ". No single call occurrence can be aligned, so concrete values and paths are unavailable.";
+            }
+
+            string baseInvocation = Invocation(
+                String(member, "memberName"),
+                NullableString(observation, "baseArgs"));
+            string prInvocation = Invocation(
+                String(member, "memberName"),
+                NullableString(observation, "prArgs"));
+            string baseResult = RenderValue(
+                NullableString(observation, "baseReturn"),
+                NullableString(observation, "baseException"));
+            string prResult = RenderValue(
+                NullableString(observation, "prReturn"),
+                NullableString(observation, "prException"));
+            string invocation = string.Equals(baseInvocation, prInvocation, StringComparison.Ordinal)
+                ? Code(baseInvocation)
+                : "base " + Code(baseInvocation) + ", PR " + Code(prInvocation);
+            return Code(String(observation, "testId")) + ": " + invocation + " returned "
+                + baseResult + "; PR returns " + prResult + ".";
+        }
+
+        private static void AppendCallPaths(StringBuilder builder, JsonElement observation)
+        {
+            string test = String(observation, "testId");
+            string basePath = RenderPath(observation, "baseCallPath");
+            string prPath = RenderPath(observation, "prCallPath");
+            if (string.Equals(basePath, prPath, StringComparison.Ordinal))
+            {
+                builder.AppendLine("- " + Code(test) + " (base and PR): " + basePath);
+                return;
+            }
+
+            builder.AppendLine("- " + Code(test) + " (base): " + basePath);
+            builder.AppendLine("- " + Code(test) + " (PR): " + prPath);
+        }
+
+        private static string RenderPath(JsonElement observation, string property)
+        {
+            if (!observation.TryGetProperty(property, out JsonElement path)
+                || path.ValueKind != JsonValueKind.Array
+                || path.GetArrayLength() == 0)
+            {
+                return "path unavailable";
+            }
+
+            return string.Join(" -> ", path.EnumerateArray().Select(node => Code(String(node, "memberName"))));
+        }
+
+        private static string Invocation(string memberName, string? args)
+        {
+            int paren = memberName.IndexOf('(');
+            string withoutParameters = paren < 0 ? memberName : memberName.Substring(0, paren);
+            int dot = withoutParameters.LastIndexOf('.');
+            string method = dot < 0 ? withoutParameters : withoutParameters.Substring(dot + 1);
+            return method + "(" + (args ?? "arguments not rendered") + ")";
+        }
+
+        private static string Source(JsonElement member)
+        {
+            string source = NullableString(member, "filePath") ?? "unresolved";
+            int? line = NullableInt(member, "line");
+            return line is null ? source : source + ":" + line;
+        }
+
+        private static string RenderMember(
+            JsonElement member,
+            string marker,
+            ModelExplanation? explanation)
+        {
+            var builder = new StringBuilder();
+            builder.AppendLine("### Unexpected runtime behavior change");
+            builder.AppendLine();
+            builder.AppendLine("`" + String(member, "memberName") + "`");
+            builder.AppendLine();
+            builder.AppendLine("This member is in a file the PR did **not** modify, but its runtime behavior changed.");
+            builder.AppendLine();
+            AppendMemberEvidence(builder, member, explanation);
+            foreach (string reason in Strings(member, "downgradeReasons").Take(2))
+            {
+                builder.AppendLine("- Downgrade: " + reason);
+            }
+
+            builder.AppendLine();
+            builder.Append(marker);
+            return builder.ToString();
+        }
+
         private static string RenderValue(string? value, string? exception) =>
-            exception is not null ? "exception `" + exception + "`" : "`" + (value ?? "(not rendered)") + "`";
+            exception is not null ? "exception " + Code(exception) : Code(value ?? "(not rendered)");
+
+        private static string Code(string text) => "`" + text.Replace("`", "'", StringComparison.Ordinal) + "`";
 
         private static string MemberKey(string memberName)
         {
@@ -462,6 +820,16 @@ namespace BehaviorDiff.Cli
         private static bool Bool(JsonElement element, string property) =>
             element.TryGetProperty(property, out JsonElement value) && value.ValueKind == JsonValueKind.True;
 
+        private static bool? NullableBool(JsonElement element, string property) =>
+            element.TryGetProperty(property, out JsonElement value)
+                ? value.ValueKind switch
+                {
+                    JsonValueKind.True => true,
+                    JsonValueKind.False => false,
+                    _ => null,
+                }
+                : null;
+
         private static IEnumerable<string> Strings(JsonElement element, string property) =>
             element.TryGetProperty(property, out JsonElement values) && values.ValueKind == JsonValueKind.Array
                 ? values.EnumerateArray().Select(value => value.GetString() ?? string.Empty)
@@ -469,7 +837,9 @@ namespace BehaviorDiff.Cli
 
         private static string Escape(string text) => text.Replace("|", "\\|", StringComparison.Ordinal).Replace("\r", " ").Replace("\n", " ");
 
-        private static string Truncate(string text) => text.Length <= 1000 ? text : text.Substring(0, 1000);
+        private static string Truncate(string text) => Truncate(text, 1000);
+
+        private static string Truncate(string text, int length) => text.Length <= length ? text : text.Substring(0, length);
 
         private sealed record ExistingComment(long Id, string Body);
 

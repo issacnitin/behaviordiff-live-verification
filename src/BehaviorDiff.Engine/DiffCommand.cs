@@ -288,6 +288,7 @@ namespace BehaviorDiff.Engine
                     lifecycleDivergences.Add(new Divergence
                     {
                         Key = new CallKey(testId, method),
+                        Ordinal = -1,
                         Kind = added ? DivergenceKind.MethodAdded : DivergenceKind.MethodRemoved,
                         Detail = added
                             ? "method is absent from the base manifest and instrumented in the PR's"
@@ -544,28 +545,8 @@ namespace BehaviorDiff.Engine
                         sourceUnavailable = a.SourceUnavailable,
                     }).ToArray(),
                 },
-                callTree = base1.Events.Select(e => new
-                {
-                    callId = e.Event.CallId,
-                    parentCallId = e.Event.ParentCallId,
-                    testId = e.Event.TestId,
-                    methodFullName = e.Event.MethodFullName,
-                    isHarness = e.Event.IsHarness,
-                    filePath = e.RelativePath,
-                    line = e.Event.Line,
-                    process = e.ProcessKey,
-                }).ToArray(),
-                prCallTree = pr.Events.Select(e => new
-                {
-                    callId = e.Event.CallId,
-                    parentCallId = e.Event.ParentCallId,
-                    testId = e.Event.TestId,
-                    methodFullName = e.Event.MethodFullName,
-                    isHarness = e.Event.IsHarness,
-                    filePath = e.RelativePath,
-                    line = e.Event.Line,
-                    process = e.ProcessKey,
-                }).ToArray(),
+                callTree = DescribeCallTree(base1),
+                prCallTree = DescribeCallTree(pr),
             };
 
             string json = JsonSerializer.Serialize(artifact, new JsonSerializerOptions { WriteIndented = true });
@@ -587,6 +568,26 @@ namespace BehaviorDiff.Engine
             subjectEvents = run.SubjectEventCount,
             harnessEvents = run.HarnessEventCount,
         };
+
+        private static object[] DescribeCallTree(RunData run)
+        {
+            Dictionary<LoadedEvent, int> ordinals = Matcher.Index(run)
+                .SelectMany(pair => pair.Value)
+                .ToDictionary(call => call.Loaded, call => call.Ordinal);
+
+            return run.Events.Select(e => (object)new
+            {
+                callId = e.Event.CallId,
+                parentCallId = e.Event.ParentCallId,
+                testId = e.Event.TestId,
+                methodFullName = e.Event.MethodFullName,
+                ordinal = ordinals[e],
+                isHarness = e.Event.IsHarness,
+                filePath = e.RelativePath,
+                line = e.Event.Line,
+                process = e.ProcessKey,
+            }).ToArray();
+        }
 
         private static object Describe(Divergence d) => new
         {
