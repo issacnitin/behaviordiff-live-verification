@@ -529,9 +529,40 @@ namespace BehaviorDiff.Cli
                         + project.Name + ". This failure is BehaviorDiff's, not the repository's."
                         + Environment.NewLine + Shell.Tail(result.Output, 25));
                 }
+
+                StageRuntimeDependencies(project, kit);
             }
 
             Console.WriteLine("  " + label + " built with instrumentation");
+        }
+
+        private static void StageRuntimeDependencies(ResolvedTestProject project, string kit)
+        {
+            string output = Path.Combine(
+                Path.GetDirectoryName(project.Path)!,
+                "bin",
+                "Release",
+                project.TraceTfm);
+            Directory.CreateDirectory(output);
+
+            foreach (string assembly in new[] { "BehaviorDiff.Contracts.dll", "BehaviorDiff.Tracer.dll" })
+            {
+                File.Copy(Path.Combine(kit, assembly), Path.Combine(output, assembly), overwrite: true);
+            }
+
+            File.Copy(
+                project.AdapterAssemblyPath,
+                Path.Combine(output, Path.GetFileName(project.AdapterAssemblyPath)),
+                overwrite: true);
+
+            string runtime = Path.Combine(kit, "runtime");
+            if (Directory.Exists(runtime))
+            {
+                foreach (string dependency in Directory.GetFiles(runtime, "*.dll", SearchOption.TopDirectoryOnly))
+                {
+                    File.Copy(dependency, Path.Combine(output, Path.GetFileName(dependency)), overwrite: true);
+                }
+            }
         }
 
         private static void WeaveOutputs(
