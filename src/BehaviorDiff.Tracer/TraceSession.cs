@@ -95,13 +95,23 @@ namespace BehaviorDiff.Tracer
                 s_locations = new SourceLocationResolver();
                 s_buffer = new TraceBuffer(tracePath, options.QueueCapacity);
 
-                var installer = new PatchInstaller(options, s_locations, RegisterMethod)
-                {
-                    ManifestPath = options.ResolveManifestPath(),
-                };
+                // Woven assemblies carry their instrumentation and register themselves, so the patcher must
+                // not also run: two backends on one process would double every event.
+                bool weaving = string.Equals(
+                    Environment.GetEnvironmentVariable("BEHAVIORDIFF_BACKEND"),
+                    "cecil",
+                    StringComparison.OrdinalIgnoreCase);
 
-                s_installer = installer;
-                installer.InstallAll();
+                if (!weaving)
+                {
+                    var installer = new PatchInstaller(options, s_locations, RegisterMethod)
+                    {
+                        ManifestPath = options.ResolveManifestPath(),
+                    };
+
+                    s_installer = installer;
+                    installer.InstallAll();
+                }
 
                 AppDomain.CurrentDomain.ProcessExit += (_, _) => Shutdown();
             }
