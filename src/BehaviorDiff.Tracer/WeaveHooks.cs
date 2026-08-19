@@ -22,6 +22,13 @@ namespace BehaviorDiff.Tracer
 
         private static AssemblyCoverage?[] s_assemblies = new AssemblyCoverage?[0];
 
+        // A woven exit that cannot recover its frame emits nothing, and a missing event is indistinguishable
+        // from a behaviour change downstream. Counted rather than thrown: faulting inside instrumentation
+        // would corrupt the process under test. The harness asserts this is zero.
+        private static int s_lostFrames;
+
+        internal static int LostFrames => System.Threading.Volatile.Read(ref s_lostFrames);
+
         /// <summary>Declares a woven assembly. Called from the woven module initializer before any Register.</summary>
         public static int RegisterAssembly(string assemblyName, bool isTestAssembly)
         {
@@ -123,6 +130,10 @@ namespace BehaviorDiff.Tracer
                 TraceSession.CompleteSync(call, TraceSession.Render(result));
                 TraceSession.EndCall(call, exception: null);
             }
+            else
+            {
+                NoteLostFrame(frame);
+            }
         }
 
         /// <summary>Normal return from a void method.</summary>
@@ -133,6 +144,10 @@ namespace BehaviorDiff.Tracer
                 TraceSession.CompleteSync(call, result: null);
                 TraceSession.EndCall(call, exception: null);
             }
+            else
+            {
+                NoteLostFrame(frame);
+            }
         }
 
         /// <summary>Escaping exception. No return value is recorded, matching the Harmony finalizer.</summary>
@@ -141,6 +156,22 @@ namespace BehaviorDiff.Tracer
             if (frame is CallFrame call)
             {
                 TraceSession.EndCall(call, exception);
+            }
+            else
+            {
+                NoteLostFrame(frame);
+            }
+        }
+
+        /// <summary>
+        /// A null frame is legitimate when the tracer is not running; anything else means the weaver emitted
+        /// a prologue whose result did not reach the epilogue.
+        /// </summary>
+        private static void NoteLostFrame(object? frame)
+        {
+            if (frame != null)
+            {
+                System.Threading.Interlocked.Increment(ref s_lostFrames);
             }
         }
 
