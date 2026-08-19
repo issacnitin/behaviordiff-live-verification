@@ -107,9 +107,14 @@ namespace BehaviorDiff.Weaver
 
             var resolver = new DefaultAssemblyResolver();
             resolver.AddSearchDirectory(Path.GetDirectoryName(Path.GetFullPath(assemblyPath)));
+
+            // DebugType=none produces no PDB. Demanding one would refuse to instrument the assembly at all,
+            // which is worse than instrumenting it with no source lines: the manifest then records
+            // SourceUnavailable and the engine's gate can see it.
+            bool hasSymbols = File.Exists(Path.ChangeExtension(assemblyPath, ".pdb"));
             var readerParameters = new ReaderParameters
             {
-                ReadSymbols = true,
+                ReadSymbols = hasSymbols,
                 ReadWrite = false,
                 AssemblyResolver = resolver,
             };

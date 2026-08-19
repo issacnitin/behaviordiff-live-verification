@@ -16,23 +16,24 @@ New-Item -ItemType Directory -Path $work | Out-Null
 $base = Join-Path $work 'run.ndjson'
 
 # Must be set before the process starts: the runtime reads it during startup.
-# DOTNET_JitNoInline is the intuitive knob but is compiled out of the retail runtime and does nothing;
-# measured directly - with only JitNoInline set, one-field-store constructors produced no events.
-# JITMinOpts is honoured in retail and disables inlining, at the cost of disabling every other
-# optimisation too.
 $env:BEHAVIORDIFF_TRACE = $base
 $env:BEHAVIORDIFF_NAMESPACES = 'SampleApp'
 $env:BEHAVIORDIFF_EXCLUDE_NAMESPACES = 'SampleApp.Diagnostics'
 $env:BEHAVIORDIFF_VERBOSE = '1'
+$env:BEHAVIORDIFF_BACKEND = 'cecil'
 
 Write-Host ''
 Write-Host '=== build ===' -ForegroundColor Cyan
 dotnet build BehaviorDiff.sln -c Release --nologo -v quiet
 if ($LASTEXITCODE -ne 0) { throw 'build failed' }
+dotnet build tools/Weaver/Weaver.csproj -c Release --nologo -v quiet
+if ($LASTEXITCODE -ne 0) { throw 'weaver build failed' }
 
 Write-Host ''
 Write-Host '=== dotnet test (traced) ===' -ForegroundColor Cyan
-dotnet test samples/SampleApp.Tests/SampleApp.Tests.csproj -c Release --no-build --nologo
+$staged = Join-Path $work 'bin'
+& (Join-Path $PSScriptRoot 'Stage-WovenSample.ps1') -TreeRoot (Split-Path -Parent $PSScriptRoot) -OutDir $staged
+dotnet test (Join-Path $staged 'SampleApp.Tests.dll') --nologo
 Write-Host "test exit code: $LASTEXITCODE"
 
 # One trace file per process, process id folded into the name.
@@ -334,52 +335,6 @@ if (-not $hasMarker) { throw 'errored field was omitted rather than marked - two
 "  ASSERT errored digest differs from readable digest   = $($errored.argsDigest -ne $readable.argsDigest)"
 if ($errored.argsDigest -eq $readable.argsDigest) { throw 'errored and readable graphs digest identically' }
 "  KNOWN GAP: two graphs differing only inside unreadable fields still collide = $($errored.argsDigest -eq $erroredOther.argsDigest)"
-
-Write-Host ''
-Write-Host '=== V2: drain interleaving ===' -ForegroundColor Cyan
-$logFile = "$($traceFile.FullName).log"
-$drain = Get-Content $logFile | Where-Object { $_ -like 'DRAIN *' } | ForEach-Object {
-    $f = @{}
-    foreach ($token in ($_ -split ' ')) { if ($token -match '^([a-z]+)=(.*)$') { $f[$Matches[1]] = $Matches[2] } }
-    [pscustomobject]@{ Seq = [int]$f.seq; Phase = $f.phase; Asm = $f.asm; Tid = [int]$f.tid }
-} | Sort-Object Seq
-
-"  drain events      : $($drain.Count)"
-"  enqueues          : $(($drain | Where-Object Phase -eq 'enqueue').Count)"
-"  patch windows     : $(($drain | Where-Object Phase -eq 'patch-begin').Count)"
-"  distinct threads  : $(($drain.Tid | Sort-Object -Unique).Count)"
-
-$open = $null
-$nested = 0
-$enqueuesInsideWindow = 0
-$startedBeforeEnclosingEnd = 0
-foreach ($e in $drain) {
-    switch ($e.Phase) {
-        'patch-begin' {
-            if ($null -ne $open) { $nested++ }
-            $open = $e
-        }
-        'patch-end' { $open = $null }
-        'enqueue' { if ($null -ne $open) { $enqueuesInsideWindow++ } }
-    }
-}
-
-"  enqueues that occurred inside an open patch window : $enqueuesInsideWindow"
-"  ASSERT no patch-begin nested inside another patch window = $($nested -eq 0)  (nested=$nested)"
-if ($nested -ne 0) { throw "patching re-entered itself $nested time(s) - a load callback patched while a patch was in flight" }
-
-$threadDepth = @{}
-$badDepth = 0
-foreach ($e in $drain) {
-    if (-not $threadDepth.ContainsKey($e.Tid)) { $threadDepth[$e.Tid] = 0 }
-    if ($e.Phase -eq 'patch-begin') { $threadDepth[$e.Tid]++; if ($threadDepth[$e.Tid] -gt 1) { $badDepth++ } }
-    elseif ($e.Phase -eq 'patch-end') { $threadDepth[$e.Tid]-- }
-}
-"  ASSERT per-thread patch depth never exceeds 1 = $($badDepth -eq 0)"
-if ($badDepth -ne 0) { throw 'a thread began patching while already patching' }
-
-$concurrent = $drain | Where-Object { $_.Asm -eq 'SampleApp.Plugin' -and $_.Phase -eq 'enqueue' }
-"  concurrent-load fixture: SampleApp.Plugin enqueued $($concurrent.Count) time(s) from thread(s) $(($concurrent.Tid | Sort-Object -Unique) -join ',')"
 
 Write-Host ''
 Write-Host '=== V3: writer reconciliation under parallelism ===' -ForegroundColor Cyan
