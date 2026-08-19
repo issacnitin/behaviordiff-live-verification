@@ -21,6 +21,7 @@ namespace BehaviorDiff.Weaver
             RegisterAssembly = module.ImportReference(hooks.GetMethod(nameof(WeaveHooks.RegisterAssembly)));
             Register = module.ImportReference(hooks.GetMethod(nameof(WeaveHooks.Register)));
             RegisterSkipped = module.ImportReference(hooks.GetMethod(nameof(WeaveHooks.RegisterSkipped)));
+            EnsureSession = module.ImportReference(hooks.GetMethod(nameof(WeaveHooks.EnsureSession)));
             Enter = module.ImportReference(hooks.GetMethod(nameof(WeaveHooks.Enter)));
             ExitValue = module.ImportReference(hooks.GetMethod(nameof(WeaveHooks.ExitValue)));
             ExitVoid = module.ImportReference(hooks.GetMethod(nameof(WeaveHooks.ExitVoid)));
@@ -37,6 +38,8 @@ namespace BehaviorDiff.Weaver
         internal MethodReference Register { get; }
 
         internal MethodReference RegisterSkipped { get; }
+
+        internal MethodReference EnsureSession { get; }
 
         internal MethodReference Enter { get; }
 
@@ -289,10 +292,13 @@ namespace BehaviorDiff.Weaver
                 }
                 else
                 {
-                    Instruction store = Instruction.Create(OpCodes.Stloc, result);
-                    il.InsertBefore(instruction, store);
-                    instruction.OpCode = OpCodes.Leave;
-                    instruction.Operand = afterTry;
+                    // A pre-existing branch may target this ret. Operands point at the instruction object,
+                    // so inserting before it would let such a branch skip the store and leave the stack
+                    // inconsistent across paths. Mutate in place and insert the leave after instead.
+                    Instruction leave = Instruction.Create(OpCodes.Leave, afterTry);
+                    il.InsertAfter(instruction, leave);
+                    instruction.OpCode = OpCodes.Stloc;
+                    instruction.Operand = result;
                 }
             }
 
@@ -342,7 +348,23 @@ namespace BehaviorDiff.Weaver
                 instructions.Add(Instruction.Create(OpCodes.Dup));
                 instructions.Add(Instruction.Create(OpCodes.Ldc_I4, i));
                 instructions.Add(Instruction.Create(OpCodes.Ldarg, parameter));
-                if (NeedsBox(parameter.ParameterType))
+
+                // MethodSelector admits by-ref parameters because Harmony dereferences them when it builds
+                // __args. Hand-emitted IL has to do that itself, or the managed pointer lands in the object[].
+                if (parameter.ParameterType is ByReferenceType byRef)
+                {
+                    TypeReference element = byRef.ElementType;
+                    if (NeedsBox(element))
+                    {
+                        instructions.Add(Instruction.Create(OpCodes.Ldobj, element));
+                        instructions.Add(Instruction.Create(OpCodes.Box, element));
+                    }
+                    else
+                    {
+                        instructions.Add(Instruction.Create(OpCodes.Ldind_Ref));
+                    }
+                }
+                else if (NeedsBox(parameter.ParameterType))
                 {
                     instructions.Add(Instruction.Create(OpCodes.Box, parameter.ParameterType));
                 }
@@ -485,6 +507,10 @@ namespace BehaviorDiff.Weaver
                     Emit(Instruction.Create(OpCodes.Call, refs.RegisterSkipped));
                 }
             }
+
+            // Start the session once every descriptor in this module is registered. This is what lets a woven
+            // process trace with no test-framework adapter present; the first module to run here wins.
+            Emit(Instruction.Create(OpCodes.Call, refs.EnsureSession));
         }
 
         private static string[] Split(string? value) =>

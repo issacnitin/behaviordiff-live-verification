@@ -6,6 +6,9 @@
     <Nullable>enable</Nullable>
     <AssemblyName>behaviordiff-weaver</AssemblyName>
     <RootNamespace>BehaviorDiff.Weaver</RootNamespace>
+    <!-- The descriptor pass reflection-loads the target, so the weaver must run on a runtime at least as
+         new as the assembly it is weaving. -->
+    <RollForward>LatestMajor</RollForward>
   </PropertyGroup>
 
   <ItemGroup>

@@ -134,6 +134,16 @@ namespace BehaviorDiff.Tracer
         }
 
         /// <summary>
+        /// Starts the trace session from environment configuration. Emitted at the end of every woven module's
+        /// initializer, so a woven process traces without a test-framework adapter to start it. Initialization
+        /// is idempotent, so it does not matter which woven module happens to run first.
+        /// </summary>
+        public static void EnsureSession()
+        {
+            TraceSession.InitializeFromEnvironment();
+        }
+
+        /// <summary>
         /// Declares a member the weaver considered and did not instrument. Emitted so the manifest accounts
         /// for every discovered member, which is what makes the frontier rule sound.
         /// </summary>
