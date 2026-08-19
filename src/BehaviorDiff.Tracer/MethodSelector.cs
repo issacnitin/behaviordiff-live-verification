@@ -41,7 +41,14 @@ namespace BehaviorDiff.Tracer
         /// <summary>Returns or takes a ref struct or pointer, which cannot round-trip through object[].</summary>
         ByRefOrPointer,
 
-        /// <summary>A static constructor. Patching a type initialiser is not safe.</summary>
+        /// <summary>
+        /// A static constructor. KNOWN LIMITATION, deliberate on both backends: a cctor runs under the CLR's
+        /// type-initialization lock, so a hook called from inside one can load a type whose own initializer is
+        /// blocked behind a lock the caller holds. This project has already hit that deadlock once, from a
+        /// static constructor in the xunit adapter, and its failure mode is a startup hang with no output.
+        /// Cecil weaves at build time rather than patching at runtime, but the woven Enter call still executes
+        /// under that lock, so weaving does not make it safe. Revisit only with a real finding that needs it.
+        /// </summary>
         TypeInitializer,
 
         /// <summary>Inherited object/ValueType member, not the target's own behavior.</summary>
@@ -54,9 +61,8 @@ namespace BehaviorDiff.Tracer
     /// <summary>Decides which members get patched, and records a reason for every one that does not.</summary>
     internal static class MethodSelector
     {
-        // The tracer must never be able to reach itself or the machinery it patches with. 0Harmony is the
-        // library, HarmonySharedState is the non-dynamic assembly Harmony creates to hold patch state, and
-        // MonoMod is the detour engine underneath it.
+        // Only PatchInstaller consults this, so it guards the Harmony backend against detouring the detour
+        // engine. Still live: the SampleApp proofs all run Harmony. Removable when Harmony is.
         private static readonly string[] ExcludedAssemblyPrefixes =
         {
             "BehaviorDiff.",

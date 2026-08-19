@@ -81,6 +81,7 @@ Write-Host '=== running suites ===' -ForegroundColor Cyan
 $runs = @{
     base1 = Invoke-Suite -Staged $baseBin -RunName 'base_run1'
     base2 = Invoke-Suite -Staged $baseBin -RunName 'base_run2'
+    base3 = Invoke-Suite -Staged $baseBin -RunName 'base_run3'
     pr    = Invoke-Suite -Staged $prBin -RunName 'pr_run'
 }
 $env:BEHAVIORDIFF_BACKEND = ''
@@ -94,7 +95,7 @@ $engine = Join-Path $repo 'src/BehaviorDiff.Engine'
 $before = [GC]::GetTotalMemory($false)
 $sw = [Diagnostics.Stopwatch]::StartNew()
 & dotnet run --project $engine -c Release --no-build -- `
-    diff --base1 $runs.base1.Dir --base2 $runs.base2.Dir --pr $runs.pr.Dir `
+    diff --base1 $runs.base1.Dir --base2 $runs.base2.Dir --base3 $runs.base3.Dir --pr $runs.pr.Dir `
     --base-root $baseTree --pr-root $prTree --out $divergence
 $diffExit = $LASTEXITCODE
 $sw.Stop()
@@ -117,9 +118,9 @@ Write-Host ("  frontier : exit={0}  {1:N0} ms" -f $frontierExit, $sw.ElapsedMill
 
 Write-Host ''
 Write-Host '=== totals ===' -ForegroundColor Cyan
-$testMs = $runs.base1.Ms + $runs.base2.Ms + $runs.pr.Ms
-$totalBytes = $runs.base1.Bytes + $runs.base2.Bytes + $runs.pr.Bytes
-Write-Host ("  three test runs : {0:N0} ms" -f $testMs)
-Write-Host ("  trace bytes     : {0:N0} total across three runs" -f $totalBytes)
+$testMs = $runs.base1.Ms + $runs.base2.Ms + $runs.base3.Ms + $runs.pr.Ms
+$totalBytes = $runs.base1.Bytes + $runs.base2.Bytes + $runs.base3.Bytes + $runs.pr.Bytes
+Write-Host ("  four test runs  : {0:N0} ms" -f $testMs)
+Write-Host ("  trace bytes     : {0:N0} total across four runs" -f $totalBytes)
 Write-Host ("  divergence set  : {0}" -f $divergence)
 Write-Host ("  frontier report : {0}" -f $report)

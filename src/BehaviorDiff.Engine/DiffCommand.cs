@@ -13,6 +13,9 @@ namespace BehaviorDiff.Engine
 
         internal string Base2 { get; set; } = string.Empty;
 
+        /// <summary>Optional third base run. Sampling showed the third run finds most of what two miss.</summary>
+        internal string Base3 { get; set; } = string.Empty;
+
         internal string Pr { get; set; } = string.Empty;
 
         internal string? BaseRoot { get; set; }
@@ -39,18 +42,34 @@ namespace BehaviorDiff.Engine
 
             var base1Report = new LoadReport();
             var base2Report = new LoadReport();
+            var base3Report = new LoadReport();
             var prReport = new LoadReport();
 
             RunData base1 = RunLoader.Load("base_run1", options.Base1, options.BaseRoot, base1Report);
             RunData base2 = RunLoader.Load("base_run2", options.Base2, options.BaseRoot, base2Report);
+            RunData? base3 = options.Base3.Length == 0
+                ? null
+                : RunLoader.Load("base_run3", options.Base3, options.BaseRoot, base3Report);
             RunData pr = RunLoader.Load("pr_run", options.Pr, options.PrRoot, prReport);
+
+            var baseRuns = new List<RunData> { base1, base2 };
+            if (base3 != null)
+            {
+                baseRuns.Add(base3);
+            }
 
             Console.WriteLine("=== STEP 0: path normalization ===");
             WriteLoad(base1, base1Report);
             WriteLoad(base2, base2Report);
+            if (base3 != null)
+            {
+                WriteLoad(base3, base3Report);
+            }
+
             WriteLoad(pr, prReport);
 
-            int absoluteRemaining = base1Report.AbsolutePathsRemaining + base2Report.AbsolutePathsRemaining + prReport.AbsolutePathsRemaining;
+            int absoluteRemaining = base1Report.AbsolutePathsRemaining + base2Report.AbsolutePathsRemaining
+                + base3Report.AbsolutePathsRemaining + prReport.AbsolutePathsRemaining;
             Console.WriteLine("  absolute paths remaining : " + absoluteRemaining + " (must be 0)");
             if (absoluteRemaining > 0)
             {
@@ -78,15 +97,28 @@ namespace BehaviorDiff.Engine
             // between two runs of the same build is nondeterministic tracer coverage, not a coverage gap
             // introduced by the PR. Left in, a flaky gap on a real assembly would intermittently suppress
             // genuine findings with nothing in the output to say it happened.
-            IReadOnlyList<ToolingGap> manifestNoise = ManifestDiff.Compute(base1, base2);
-            var noiseSignatures = new HashSet<string>(manifestNoise.Select(GapSignature), StringComparer.Ordinal);
+            var noiseSignatures = new HashSet<string>(StringComparer.Ordinal);
+            var manifestNoise = new List<ToolingGap>();
+            for (int i = 0; i < baseRuns.Count; i++)
+            {
+                for (int j = i + 1; j < baseRuns.Count; j++)
+                {
+                    foreach (ToolingGap gap in ManifestDiff.Compute(baseRuns[i], baseRuns[j]))
+                    {
+                        if (noiseSignatures.Add(GapSignature(gap)))
+                        {
+                            manifestNoise.Add(gap);
+                        }
+                    }
+                }
+            }
 
             IReadOnlyList<ToolingGap> allGaps = ManifestDiff.Compute(base1, pr);
             var gaps = allGaps.Where(g => !noiseSignatures.Contains(GapSignature(g))).ToList();
             HashSet<string> gapMethods = ManifestDiff.AffectedMethods(gaps);
 
             Console.WriteLine("  raw gaps (base vs PR)    : " + allGaps.Count);
-            Console.WriteLine("  ManifestNoise (base1/2)  : " + manifestNoise.Count);
+            Console.WriteLine("  ManifestNoise (base runs): " + manifestNoise.Count);
             foreach (ToolingGap gap in manifestNoise)
             {
                 Console.WriteLine("    noise: " + (gap.MethodFullName ?? gap.Assembly) + "  " + gap.Scope
@@ -105,14 +137,48 @@ namespace BehaviorDiff.Engine
             }
 
             Console.WriteLine();
-            Console.WriteLine("=== STEP 2: noise baseline (base_run1 vs base_run2) ===");
-            var base1Index = Matcher.Index(base1);
-            var base2Index = Matcher.Index(base2);
-            (List<Divergence> noiseDivergences, List<MatchedKey> noiseMatched, _) = Matcher.Compare(base1Index, base2Index);
+            Console.WriteLine("=== STEP 2: noise baseline (" + baseRuns.Count + " base runs, all pairs) ===");
+            var baseIndexes = baseRuns.Select(Matcher.Index).ToList();
+            var base1Index = baseIndexes[0];
 
-            var noiseKeys = new HashSet<CallKey>(noiseDivergences.Select(d => d.Key));
-            Console.WriteLine("  base keys compared       : " + noiseMatched.Count);
+            // Union over every pair, not just consecutive ones: a key can agree in one pair and disagree in
+            // another, and any disagreement at all disqualifies it as evidence.
+            var noiseKeys = new HashSet<CallKey>();
+            var noiseDivergences = new List<Divergence>();
+            int baseKeysCompared = 0;
+            int pairsCompared = 0;
+            for (int i = 0; i < baseIndexes.Count; i++)
+            {
+                for (int j = i + 1; j < baseIndexes.Count; j++)
+                {
+                    (List<Divergence> pairDivergences, List<MatchedKey> pairMatched, _) =
+                        Matcher.Compare(baseIndexes[i], baseIndexes[j]);
+                    baseKeysCompared = Math.Max(baseKeysCompared, pairMatched.Count);
+                    pairsCompared++;
+                    foreach (Divergence divergence in pairDivergences)
+                    {
+                        if (noiseKeys.Add(divergence.Key))
+                        {
+                            noiseDivergences.Add(divergence);
+                        }
+                    }
+                }
+            }
+
+            Console.WriteLine("  base keys compared       : " + baseKeysCompared + " (" + pairsCompared + " pair(s))");
             Console.WriteLine("  nondeterministic keys    : " + noiseKeys.Count);
+
+            // Sampling on FluentValidation gave 2,122 keys from 2 runs and 2,388 from 4, so the set is still
+            // growing when we stop. Whatever it misses is charged to the PR as a divergence.
+            Console.WriteLine("  RESIDUAL: this exclusion set is a sample from " + baseRuns.Count
+                + " base run(s), not a complete characterisation of what varies between runs.");
+            Console.WriteLine("            Keys that happened to agree across these runs but vary in general");
+            Console.WriteLine("            remain in the comparison and will be reported as divergences.");
+            if (baseRuns.Count < 3)
+            {
+                Console.WriteLine("            Two base runs is a single sample of each key; pass --base3 for a better one.");
+            }
+
             foreach (var group in noiseDivergences.GroupBy(d => d.Key.MethodFullName)
                 .OrderByDescending(g => g.Count()).Take(15))
             {

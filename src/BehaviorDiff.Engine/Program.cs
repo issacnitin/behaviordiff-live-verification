@@ -106,6 +106,7 @@ namespace BehaviorDiff.Engine
                 {
                     case "--base1": options.Base1 = args[++i]; break;
                     case "--base2": options.Base2 = args[++i]; break;
+                    case "--base3": options.Base3 = args[++i]; break;
                     case "--pr": options.Pr = args[++i]; break;
                     case "--base-root": options.BaseRoot = args[++i]; break;
                     case "--pr-root": options.PrRoot = args[++i]; break;
@@ -119,7 +120,7 @@ namespace BehaviorDiff.Engine
             if (options.Base1.Length == 0 || options.Base2.Length == 0 || options.Pr.Length == 0 || options.Output.Length == 0)
             {
                 Console.Error.WriteLine("usage: diff --base1 <dir> --base2 <dir> --pr <dir> --out <file.json>");
-                Console.Error.WriteLine("            [--base-root <path>] [--pr-root <path>]");
+                Console.Error.WriteLine("            [--base3 <dir>] [--base-root <path>] [--pr-root <path>]");
                 return ExitUsage;
             }
 
