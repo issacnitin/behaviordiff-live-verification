@@ -193,12 +193,26 @@ namespace BehaviorDiff.Cli
             JsonElement summary = findings.GetProperty("summary");
             builder.AppendLine("## BehaviorDiff runtime analysis");
             builder.AppendLine();
-            builder.AppendLine("**UNEXPECTED: " + Int(summary, "unexpectedMembers") + " member(s), across "
-                + Int(summary, "unexpectedCallSites") + " call site(s).**");
+            AppendCoverage(builder, findings);
             builder.AppendLine();
-            builder.AppendLine("Unexpected means runtime behavior changed in a file the PR did not modify. That is the point of this analysis.");
-            builder.AppendLine();
-            AppendMembers(builder, findings, "unexpected", "Unexpected members");
+
+            int unexpectedMembers = Int(summary, "unexpectedMembers");
+            if (unexpectedMembers == 0)
+            {
+                builder.AppendLine("**No unexpected behavior changes across " + Int(summary, "editedFiles")
+                    + " edited files (" + Int(summary, "tracedMembers") + " members, "
+                    + Int(summary, "observedCallSites") + " call sites observed).**");
+            }
+            else
+            {
+                builder.AppendLine("**UNEXPECTED: " + unexpectedMembers + " member(s), across "
+                    + Int(summary, "unexpectedCallSites") + " call site(s).**");
+                builder.AppendLine();
+                builder.AppendLine("Unexpected means runtime behavior changed in a file the PR did not modify. That is the point of this analysis.");
+                builder.AppendLine();
+                AppendMembers(builder, findings, "unexpected", "Unexpected members");
+            }
+
             builder.AppendLine();
             builder.AppendLine("**EXPECTED: " + Int(summary, "expectedMembers") + " member(s), across "
                 + Int(summary, "expectedCallSites") + " call site(s).**");
@@ -206,6 +220,29 @@ namespace BehaviorDiff.Cli
             builder.AppendLine();
             builder.Append(marker);
             return builder.ToString();
+        }
+
+        private static void AppendCoverage(StringBuilder builder, JsonElement findings)
+        {
+            JsonElement coverage = findings.GetProperty("coverage");
+            JsonElement summary = coverage.GetProperty("summary");
+            builder.AppendLine("### Edited-code coverage");
+            builder.AppendLine("**" + Int(summary, "exercisedEditedFiles") + " of "
+                + Int(summary, "editedFiles") + " edited files were exercised by tests.**");
+            builder.AppendLine(Int(summary, "tracedMembers") + " members, "
+                + Int(summary, "observedCallSites") + " call sites, and "
+                + Int(summary, "totalCallCount") + " total calls were observed in representative base/PR runs.");
+
+            JsonElement[] unexercised = coverage.GetProperty("files").EnumerateArray()
+                .Where(file => !Bool(file, "exercised"))
+                .ToArray();
+            if (unexercised.Length > 0)
+            {
+                builder.AppendLine();
+                builder.AppendLine("Not exercised (no behavioral claim): "
+                    + string.Join(", ", unexercised.Select(file => "`" + NullableString(file, "filePath") + "`")) + ".");
+                builder.AppendLine("Zero observed calls are not evidence that these files did not change behavior.");
+            }
         }
 
         private static void AppendMembers(StringBuilder builder, JsonElement findings, string attribution, string heading)

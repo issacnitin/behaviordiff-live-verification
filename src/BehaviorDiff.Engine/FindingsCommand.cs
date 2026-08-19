@@ -33,6 +33,8 @@ namespace BehaviorDiff.Engine
 
             JsonElement frontier = frontierReport.RootElement.GetProperty("frontier");
             JsonElement divergences = divergenceSet.RootElement.GetProperty("divergences");
+            JsonElement coverage = frontierReport.RootElement.GetProperty("changedFileCoverage").Clone();
+            JsonElement coverageSummary = coverage.GetProperty("summary");
             var nodes = frontier.EnumerateArray().ToList();
             var observations = divergences.EnumerateArray().ToList();
 
@@ -65,7 +67,13 @@ namespace BehaviorDiff.Engine
                     expectedMembers,
                     expectedCallSites,
                     untestedMembers = members.Count(member => member.UntestedCallSiteCount > 0),
+                    editedFiles = Int(coverageSummary, "editedFiles"),
+                    exercisedEditedFiles = Int(coverageSummary, "exercisedEditedFiles"),
+                    tracedMembers = Int(coverageSummary, "tracedMembers"),
+                    observedCallSites = Int(coverageSummary, "observedCallSites"),
+                    totalCallCount = Int(coverageSummary, "totalCallCount"),
                 },
+                coverage,
                 members,
             };
 
