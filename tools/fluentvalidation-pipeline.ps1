@@ -92,21 +92,21 @@ Write-Host '=== engine ===' -ForegroundColor Cyan
 $divergence = Join-Path $work 'divergence-set.json'
 $engine = Join-Path $repo 'src/BehaviorDiff.Engine'
 
-$before = [GC]::GetTotalMemory($false)
-$sw = [Diagnostics.Stopwatch]::StartNew()
-& dotnet run --project $engine -c Release --no-build -- `
-    diff --base1 $runs.base1.Dir --base2 $runs.base2.Dir --base3 $runs.base3.Dir --pr $runs.pr.Dir `
-    --base-root $baseTree --pr-root $prTree --out $divergence
-$diffExit = $LASTEXITCODE
-$sw.Stop()
-Write-Host ("  diff     : exit={0}  {1:N0} ms" -f $diffExit, $sw.ElapsedMilliseconds)
-if ($diffExit -ne 0) { exit $diffExit }
-
+# diff needs this too now: an added member only counts as behavior if its file is one the PR edited.
 $changedList = Join-Path $work 'changed-files.txt'
 Push-Location $baseTree
 git diff --name-only 6eac0afe^ 6eac0afe | Set-Content $changedList
 Pop-Location
 Write-Host ("  changed files from git : {0}" -f (Get-Content $changedList).Count)
+
+$sw = [Diagnostics.Stopwatch]::StartNew()
+& dotnet run --project $engine -c Release --no-build -- `
+    diff --base1 $runs.base1.Dir --base2 $runs.base2.Dir --base3 $runs.base3.Dir --pr $runs.pr.Dir --changed-files $changedList `
+    --base-root $baseTree --pr-root $prTree --out $divergence
+$diffExit = $LASTEXITCODE
+$sw.Stop()
+Write-Host ("  diff     : exit={0}  {1:N0} ms" -f $diffExit, $sw.ElapsedMilliseconds)
+if ($diffExit -ne 0) { exit $diffExit }
 
 $report = Join-Path $work 'frontier.json'
 $sw = [Diagnostics.Stopwatch]::StartNew()

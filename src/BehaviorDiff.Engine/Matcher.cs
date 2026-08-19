@@ -63,6 +63,15 @@ namespace BehaviorDiff.Engine
         CallCountChange,
         MissingInPr,
         MissingInBase,
+
+        /// <summary>
+        /// The PR added this method: absent from the base manifest, instrumented in the PR's. Kept apart
+        /// from DigestDiff because there is no base counterpart, so it carries no comparable evidence.
+        /// </summary>
+        MethodAdded,
+
+        /// <summary>The PR removed this method: instrumented in the base manifest, absent from the PR's.</summary>
+        MethodRemoved,
     }
 
     internal sealed class Divergence

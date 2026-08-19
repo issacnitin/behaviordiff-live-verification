@@ -107,6 +107,7 @@ namespace BehaviorDiff.Engine
                     case "--base1": options.Base1 = args[++i]; break;
                     case "--base2": options.Base2 = args[++i]; break;
                     case "--base3": options.Base3 = args[++i]; break;
+                    case "--changed-files": options.ChangedFiles = args[++i]; break;
                     case "--pr": options.Pr = args[++i]; break;
                     case "--base-root": options.BaseRoot = args[++i]; break;
                     case "--pr-root": options.PrRoot = args[++i]; break;

@@ -16,6 +16,9 @@ namespace BehaviorDiff.Engine
         /// <summary>Optional third base run. Sampling showed the third run finds most of what two miss.</summary>
         internal string Base3 { get; set; } = string.Empty;
 
+        /// <summary>Needed to tell an added method in an edited file from one the weaver simply saw differently.</summary>
+        internal string ChangedFiles { get; set; } = string.Empty;
+
         internal string Pr { get; set; } = string.Empty;
 
         internal string? BaseRoot { get; set; }
@@ -115,7 +118,47 @@ namespace BehaviorDiff.Engine
 
             IReadOnlyList<ToolingGap> allGaps = ManifestDiff.Compute(base1, pr);
             var gaps = allGaps.Where(g => !noiseSignatures.Contains(GapSignature(g))).ToList();
-            HashSet<string> gapMethods = ManifestDiff.AffectedMethods(gaps);
+
+            // A member that appeared or disappeared inside a file the PR edited is the PR's doing, not the
+            // weaver's. Only absent <-> Patched qualifies: Patched <-> Skipped is MethodSelector reaching a
+            // different verdict about the same member, which is a change in what we can see, not in the code.
+            var changedFiles = FrontierCommand.LoadChangedFiles(options.ChangedFiles);
+            var methodFiles = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (RunData run in new[] { base1, pr })
+            {
+                foreach (LoadedEvent traced in run.Events)
+                {
+                    if (traced.Event.MethodFullName is { Length: > 0 } name
+                        && traced.RelativePath is { Length: > 0 } path
+                        && !methodFiles.ContainsKey(name))
+                    {
+                        methodFiles[name] = path;
+                    }
+                }
+            }
+
+            var lifecycle = new List<ToolingGap>();
+            var remainingGaps = new List<ToolingGap>();
+            foreach (ToolingGap gap in gaps)
+            {
+                if (IsMethodLifecycle(gap)
+                    && gap.MethodFullName is { Length: > 0 } method
+                    && methodFiles.TryGetValue(method, out string? file)
+                    && changedFiles.Contains(file))
+                {
+                    lifecycle.Add(gap);
+                }
+                else
+                {
+                    remainingGaps.Add(gap);
+                }
+            }
+
+            gaps = remainingGaps;
+
+            // Suppression still covers the promoted members: the matcher would otherwise report the same
+            // one-sided member again as MissingInBase/MissingInPr, and the lifecycle kind is the better name.
+            HashSet<string> gapMethods = ManifestDiff.AffectedMethods(gaps.Concat(lifecycle).ToList());
 
             Console.WriteLine("  raw gaps (base vs PR)    : " + allGaps.Count);
             Console.WriteLine("  ManifestNoise (base runs): " + manifestNoise.Count);
@@ -126,6 +169,12 @@ namespace BehaviorDiff.Engine
             }
 
             Console.WriteLine("  tooling gaps (real)      : " + gaps.Count);
+            Console.WriteLine("  promoted to behavior     : " + lifecycle.Count
+                + "  (member added/removed inside a changed file)");
+            foreach (ToolingGap gap in lifecycle.Take(10))
+            {
+                Console.WriteLine("    " + gap.BaseState + " -> " + gap.PrState + "  " + gap.MethodFullName);
+            }
             foreach (var group in gaps.GroupBy(g => g.Scope).OrderBy(g => g.Key, StringComparer.Ordinal))
             {
                 Console.WriteLine("    " + group.Key + " : " + group.Count());
@@ -198,6 +247,39 @@ namespace BehaviorDiff.Engine
 
             var remaining = afterNoise.Where(d => !gapMethods.Contains(d.Key.MethodFullName)).ToList();
             Console.WriteLine("  excluded as tooling gap  : " + (afterNoise.Count - remaining.Count));
+
+            // One divergence per test that reached the member, so the frontier can place it in a call tree.
+            var lifecycleDivergences = new List<Divergence>();
+            foreach (ToolingGap gap in lifecycle)
+            {
+                bool added = string.Equals(gap.PrState, "Patched", StringComparison.Ordinal);
+                RunData side = added ? pr : base1;
+                string method = gap.MethodFullName!;
+
+                foreach (string testId in side.Events
+                    .Where(e => string.Equals(e.Event.MethodFullName, method, StringComparison.Ordinal))
+                    .Select(e => e.Event.TestId ?? string.Empty)
+                    .Distinct(StringComparer.Ordinal))
+                {
+                    lifecycleDivergences.Add(new Divergence
+                    {
+                        Key = new CallKey(testId, method),
+                        Kind = added ? DivergenceKind.MethodAdded : DivergenceKind.MethodRemoved,
+                        Detail = added
+                            ? "method is absent from the base manifest and instrumented in the PR's"
+                            : "method is instrumented in the base manifest and absent from the PR's",
+                        RelativePath = methodFiles.TryGetValue(method, out string? p) ? p : null,
+                    });
+                }
+            }
+
+            if (lifecycleDivergences.Count > 0)
+            {
+                Console.WriteLine("  added/removed members    : " + lifecycleDivergences.Count
+                    + " divergence(s) across " + lifecycle.Count + " member(s)");
+                remaining.AddRange(lifecycleDivergences);
+            }
+
             Console.WriteLine("  remaining divergences    : " + remaining.Count);
 
             foreach (var group in remaining.GroupBy(d => d.Kind).OrderBy(g => g.Key.ToString(), StringComparer.Ordinal))
@@ -241,6 +323,20 @@ namespace BehaviorDiff.Engine
             Console.WriteLine();
             Console.WriteLine("DivergenceSet written: " + Path.GetFullPath(options.Output));
             return 0;
+        }
+
+        /// <summary>Only absent &lt;-&gt; Patched. A Skipped transition is the weaver's verdict changing.</summary>
+        private static bool IsMethodLifecycle(ToolingGap gap)
+        {
+            if (!string.Equals(gap.Scope, "member", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            return (string.Equals(gap.BaseState, "absent", StringComparison.Ordinal)
+                    && string.Equals(gap.PrState, "Patched", StringComparison.Ordinal))
+                || (string.Equals(gap.BaseState, "Patched", StringComparison.Ordinal)
+                    && string.Equals(gap.PrState, "absent", StringComparison.Ordinal));
         }
 
         private static string GapSignature(ToolingGap gap) =>

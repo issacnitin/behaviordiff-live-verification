@@ -196,7 +196,10 @@ namespace BehaviorDiff.Engine
                     node.Symptoms.Add(entry.Kind + ":" + entry.Detail);
                 }
 
-                bool unalignable = entries.Any(e => e.Kind == "CallCountChange");
+                // An added method has no base counterpart and a removed one has no PR counterpart, so
+                // "all descendants identical" is not a question that can be answered either way.
+                bool lifecycle = entries.Any(e => e.Kind == "MethodAdded" || e.Kind == "MethodRemoved");
+                bool unalignable = lifecycle || entries.Any(e => e.Kind == "CallCountChange");
 
                 // Descendants of every call of this key in the base tree.
                 var descendantKeys = new HashSet<string>(StringComparer.Ordinal);
@@ -219,7 +222,9 @@ namespace BehaviorDiff.Engine
                 {
                     // The subtree cannot be aligned call-for-call, so no claim about descendants is available.
                     node.Verified = false;
-                    node.DowngradeReasons.Add("SubtreeUnalignable: call count differs, descendants are not alignable");
+                    node.DowngradeReasons.Add(lifecycle
+                        ? "MemberLifecycle: the member exists on only one side, so it has no counterpart to compare descendants against. This says the PR added or removed it, not that it caused anything."
+                        : "SubtreeUnalignable: call count differs, descendants are not alignable");
                 }
                 else if (anyDescendantDiverged)
                 {
@@ -499,7 +504,7 @@ namespace BehaviorDiff.Engine
             return tick < 0 ? simple : simple.Substring(0, tick);
         }
 
-        private static HashSet<string> LoadChangedFiles(string path)
+        internal static HashSet<string> LoadChangedFiles(string path)
         {
             var changed = new HashSet<string>(StringComparer.Ordinal);
             if (string.IsNullOrEmpty(path) || !File.Exists(path))
