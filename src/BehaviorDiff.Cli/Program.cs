@@ -281,7 +281,7 @@ namespace BehaviorDiff.Cli
                 Console.WriteLine("  " + project.Name);
                 Console.WriteLine("    xunit     : " + (project.XunitVersion.Length == 0 ? "<unresolved>" : project.XunitPackage + " " + project.XunitVersion));
                 Console.WriteLine("    tfms      : " + string.Join(", ", project.AllTfms));
-                Console.WriteLine("    tracing   : " + (project.TraceTfm.Length == 0 ? "<none>" : project.TraceTfm) + "  (lowest traceable)");
+                Console.WriteLine("    tracing   : " + (project.TraceTfm.Length == 0 ? "<none>" : project.TraceTfm) + "  (highest traceable)");
                 foreach ((string tfm, string reason) in project.RejectedTfms)
                 {
                     Console.WriteLine("    rejected  : " + tfm + " - " + reason);

@@ -116,8 +116,8 @@ namespace BehaviorDiff.Tracer
                     sourceResolution,
                     (ReturnKind)returnKind,
                     parameterNames.Length == 0 ? s_noParameters : parameterNames.Split(','),
-                    coverage);
-
+                coverage,
+                isTestRoot);
                 coverage.NotePatchedMember();
                 coverage.NoteMemberSource(sourceResolution);
 

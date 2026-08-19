@@ -22,6 +22,9 @@ namespace BehaviorDiff.Tracer
         // parent/depth relationship has to follow the logical flow rather than the physical thread.
         private static readonly AsyncLocal<CallFrame?> s_currentFrame = new AsyncLocal<CallFrame?>();
 
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> s_testRootInvocations =
+            new System.Collections.Concurrent.ConcurrentDictionary<string, int>(StringComparer.Ordinal);
+
         // Guards against a traced method being re-entered by the tracer itself, e.g. through argument rendering.
         [ThreadStatic]
         private static bool t_inTracer;
@@ -243,6 +246,16 @@ namespace BehaviorDiff.Tracer
             // tracer code at all and are unobservable; see AssemblyManifestEntry.
             info.Coverage.NoteTracedCall();
 
+            // A test's extent is the subtree under its root call. When no framework adapter has named the
+            // test, derive the name here instead. s_testId is AsyncLocal, so a continuation that resumes on
+            // another thread still reports the root it belongs to.
+            string? previousTestId = s_testId.Value;
+            bool ownsTestId = info.IsTestRoot && previousTestId is null;
+            if (ownsTestId)
+            {
+                s_testId.Value = NextSyntheticTestId(info.FullName);
+            }
+
             CallFrame? parent = s_currentFrame.Value;
             var frame = new CallFrame(
                 Interlocked.Increment(ref s_nextCallId),
@@ -252,8 +265,20 @@ namespace BehaviorDiff.Tracer
                 ValueRenderer.RenderArguments(info.ParameterNames, args, s_options.MaxDigestLength),
                 Environment.CurrentManagedThreadId);
 
+            frame.OwnsTestId = ownsTestId;
+            frame.PreviousTestId = previousTestId;
             s_currentFrame.Value = frame;
             return frame;
+        }
+
+        /// <summary>
+        /// Names the nth invocation of a test root. Theory cases share a method, so the ordinal is what
+        /// separates them; it is exactly as stable across builds as the invocation order itself.
+        /// </summary>
+        private static string NextSyntheticTestId(string fullName)
+        {
+            int ordinal = s_testRootInvocations.AddOrUpdate(fullName, 1, (_, count) => count + 1);
+            return fullName + "#" + ordinal.ToString(System.Globalization.CultureInfo.InvariantCulture);
         }
 
         internal static void CompleteSync(CallFrame frame, DigestResult? result)
@@ -265,6 +290,11 @@ namespace BehaviorDiff.Tracer
         {
             // Restore the logical call stack first: this must happen whether or not the call threw.
             s_currentFrame.Value = frame.Parent;
+
+            if (frame.OwnsTestId)
+            {
+                s_testId.Value = frame.PreviousTestId;
+            }
 
             if (exception != null)
             {

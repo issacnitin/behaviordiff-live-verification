@@ -434,7 +434,7 @@ namespace BehaviorDiff.Tracer
             }
 
             _locations.Resolve(member, out string? filePath, out int line, out string sourceResolution);
-            var info = new MethodTraceInfo(fullName, filePath, line, sourceResolution, kind, parameterNames, coverage);
+            var info = new MethodTraceInfo(fullName, filePath, line, sourceResolution, kind, parameterNames, coverage, isTestRoot);
 
             try
             {

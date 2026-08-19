@@ -26,10 +26,10 @@ namespace BehaviorDiff.Cli
         internal List<(string Tfm, string Reason)> RejectedTfms { get; } = new();
 
         /// <summary>
-        /// The LOWEST traceable framework, not the highest. The tracer's rewriting engine is the binding
-        /// constraint and it works on older runtimes that newer ones have broken, so the lowest supported
-        /// target is the one most likely to run. Picking the highest maximises exposure to exactly the
-        /// runtime changes that break emit.
+        /// The HIGHEST traceable framework. This used to be the lowest: Harmony could not emit on net9.0 or
+        /// later, so the oldest target was the only one certain to be instrumentable. Cecil weaves at build
+        /// time and has no such limit, so the preference inverts to the framework the project is most likely
+        /// to actually ship on, which is the one whose behavior is worth diffing.
         /// </summary>
         internal string TraceTfm => TraceableTfms.Count == 0 ? string.Empty : TraceableTfms[0];
 
@@ -110,10 +110,10 @@ namespace BehaviorDiff.Cli
                 }
             }
 
-            resolved.TraceableTfms.Sort((a, b) => (Version(a) ?? 0).CompareTo(Version(b) ?? 0));
-            foreach (string higher in resolved.TraceableTfms.Skip(1))
+            resolved.TraceableTfms.Sort((a, b) => (Version(b) ?? 0).CompareTo(Version(a) ?? 0));
+            foreach (string lower in resolved.TraceableTfms.Skip(1))
             {
-                resolved.RejectedTfms.Add((higher, "traceable, but a lower traceable target exists and is preferred"));
+                resolved.RejectedTfms.Add((lower, "traceable, but a higher traceable target exists and is preferred"));
             }
 
             return resolved;

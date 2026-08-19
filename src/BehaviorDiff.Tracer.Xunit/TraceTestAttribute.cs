@@ -36,13 +36,30 @@ namespace BehaviorDiff.Tracer
             // is a hang at startup with no output, which is what happened when test parallelism was raised.
             TraceSession.InitializeFromEnvironment();
 
+            if (SuppressNaming)
+            {
+                return;
+            }
+
             TraceSession.CurrentTestId = BuildTestId(methodUnderTest);
         }
 
         public override void After(MethodInfo methodUnderTest)
         {
+            if (SuppressNaming)
+            {
+                return;
+            }
+
             TraceSession.CurrentTestId = null;
         }
+
+        /// <summary>Lets the same binary be run with framework naming and with woven naming, to compare them.</summary>
+        private static bool SuppressNaming =>
+            string.Equals(
+                Environment.GetEnvironmentVariable("BEHAVIORDIFF_CORRELATION"),
+                "woven",
+                StringComparison.OrdinalIgnoreCase);
 
         private static string BuildTestId(MethodInfo methodUnderTest)
         {

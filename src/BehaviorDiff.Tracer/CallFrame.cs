@@ -26,7 +26,8 @@ namespace BehaviorDiff.Tracer
             string sourceResolution,
             ReturnKind returnKind,
             string[] parameterNames,
-            AssemblyCoverage coverage)
+            AssemblyCoverage coverage,
+            bool isTestRoot)
         {
             FullName = fullName;
             FilePath = filePath;
@@ -35,6 +36,7 @@ namespace BehaviorDiff.Tracer
             ReturnKind = returnKind;
             ParameterNames = parameterNames;
             Coverage = coverage;
+            IsTestRoot = isTestRoot;
         }
 
         internal string FullName { get; }
@@ -51,6 +53,9 @@ namespace BehaviorDiff.Tracer
 
         /// <summary>Provenance of the declaring assembly, so calls arriving mid-patch can be counted.</summary>
         internal AssemblyCoverage Coverage { get; }
+
+        /// <summary>Carries a test attribute, so a call to it opens a test's extent.</summary>
+        internal bool IsTestRoot { get; }
     }
 
     /// <summary>
@@ -88,6 +93,12 @@ namespace BehaviorDiff.Tracer
 
         /// <summary>Set by the postfix for async methods so the finalizer knows the continuation owns emission.</summary>
         internal bool DeferredToContinuation { get; set; }
+
+        /// <summary>This frame opened the current test's extent and must close it again on exit.</summary>
+        internal bool OwnsTestId { get; set; }
+
+        /// <summary>The test id in force before this frame opened one, restored when it exits.</summary>
+        internal string? PreviousTestId { get; set; }
 
         /// <summary>Exactly one of postfix / finalizer / continuation gets to emit this frame.</summary>
         internal bool TryClaimEmit()
