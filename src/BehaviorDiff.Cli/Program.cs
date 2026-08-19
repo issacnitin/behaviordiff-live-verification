@@ -11,6 +11,19 @@ namespace BehaviorDiff.Cli
     {
         internal static int Main(string[] args)
         {
+            if (args.Length > 0 && args[0] == "post")
+            {
+                try
+                {
+                    return PostingCommand.Run(args.Skip(1).ToArray());
+                }
+                catch (CliException ex)
+                {
+                    Console.Error.WriteLine("POST FAILED: " + ex.Message);
+                    return ExitCodes.BuildOrTestFailure;
+                }
+            }
+
             string? baseRef = null;
             string? prRef = null;
             string? ciProvider = null;
@@ -103,6 +116,7 @@ namespace BehaviorDiff.Cli
         {
             Console.WriteLine("usage: behaviordiff <repo> --base <ref> --pr <ref> [--work <dir>] [--findings <file>] [--keep]");
             Console.WriteLine("       behaviordiff [<repo>] --ci=azuredevops [--work <dir>] [--findings <file>] [--keep]");
+            Console.WriteLine("       behaviordiff post --provider=azuredevops --findings <file> [--gate warn-only|fail-on-findings]");
             Console.WriteLine();
             Console.WriteLine("  exit 0  analyzed, no unexpected divergences");
             Console.WriteLine("  exit 1  analyzed, unexpected divergences found");
