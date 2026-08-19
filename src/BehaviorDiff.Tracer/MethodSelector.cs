@@ -18,7 +18,6 @@ namespace BehaviorDiff.Tracer
         /// <summary>Declared on a generic type definition; a closed postfix cannot be built for it.</summary>
         GenericTypeDefinition,
 
-        /// <summary>Declared on a [CompilerGenerated] type: lambda display class, local function container.</summary>
         CompilerGeneratedType,
 
         /// <summary>Declared on an async or iterator state machine.</summary>
@@ -94,6 +93,19 @@ namespace BehaviorDiff.Tracer
         /// True when the type's namespace matches an include prefix. Types outside the include set are not
         /// enumerated at all and never reach the manifest; everything inside it does, even when skipped.
         /// </summary>
+        /// <summary>
+        /// Which backend is asking. Harmony has to skip generic definitions because its prefix and postfix
+        /// are closed methods that would have to be built per type argument, and the arguments are only
+        /// known per call. Cecil rewrites the definition's own IL and every instantiation runs that body,
+        /// so the restriction is Harmony's, not the tool's. The two backends therefore instrument
+        /// deliberately different method sets.
+        /// </summary>
+        internal enum Backend
+        {
+            Harmony,
+            Cecil,
+        }
+
         internal static bool IsInScope(Type type, TracerOptions options)
         {
             return MatchesAny(type.Namespace, options.IncludeNamespacePrefixes);
@@ -103,14 +115,14 @@ namespace BehaviorDiff.Tracer
         /// Type-level verdict for an in-scope type. A non-None result still means every member gets a
         /// manifest entry carrying this reason.
         /// </summary>
-        internal static SkipReason EvaluateType(Type type, TracerOptions options)
+        internal static SkipReason EvaluateType(Type type, TracerOptions options, Backend backend)
         {
             if (MatchesAny(type.Namespace, options.ExcludeNamespacePrefixes))
             {
                 return SkipReason.ExcludedNamespace;
             }
 
-            if (type.IsGenericTypeDefinition)
+            if (backend == Backend.Harmony && type.IsGenericTypeDefinition)
             {
                 return SkipReason.GenericTypeDefinition;
             }
@@ -128,7 +140,7 @@ namespace BehaviorDiff.Tracer
             return type.FullName is null ? SkipReason.Unresolvable : SkipReason.None;
         }
 
-        internal static SkipReason Evaluate(MethodBase method)
+        internal static SkipReason Evaluate(MethodBase method, Backend backend)
         {
             Type? declaring = method.DeclaringType;
             if (declaring is null)
@@ -165,7 +177,7 @@ namespace BehaviorDiff.Tracer
                 return SkipReason.PropertyOrOperator;
             }
 
-            if (method.IsGenericMethodDefinition || method.ContainsGenericParameters)
+            if (backend == Backend.Harmony && (method.IsGenericMethodDefinition || method.ContainsGenericParameters))
             {
                 return SkipReason.GenericDefinition;
             }

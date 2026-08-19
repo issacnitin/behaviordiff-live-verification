@@ -374,7 +374,7 @@ namespace BehaviorDiff.Tracer
 
         private void PatchType(Type type, AssemblyCoverage coverage)
         {
-            SkipReason typeReason = MethodSelector.EvaluateType(type, _options);
+            SkipReason typeReason = MethodSelector.EvaluateType(type, _options, MethodSelector.Backend.Harmony);
 
             List<MethodBase> members;
             try
@@ -397,7 +397,7 @@ namespace BehaviorDiff.Tracer
             {
                 // A type-level skip still yields a manifest entry per member: the engine has to know these
                 // exist and are unobservable, or the frontier rule silently loses its footing.
-                SkipReason reason = typeReason != SkipReason.None ? typeReason : MethodSelector.Evaluate(member);
+                SkipReason reason = typeReason != SkipReason.None ? typeReason : MethodSelector.Evaluate(member, MethodSelector.Backend.Harmony);
 
                 if (reason != SkipReason.None)
                 {

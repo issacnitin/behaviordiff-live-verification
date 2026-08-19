@@ -56,7 +56,7 @@ namespace BehaviorDiff.Weaver
                     continue;
                 }
 
-                SkipReason typeReason = MethodSelector.EvaluateType(type, options);
+                SkipReason typeReason = MethodSelector.EvaluateType(type, options, MethodSelector.Backend.Cecil);
 
                 var members = new List<MethodBase>();
                 members.AddRange(type.GetMethods(MemberFlags));
@@ -66,7 +66,7 @@ namespace BehaviorDiff.Weaver
                 {
                     SkipReason reason = typeReason != SkipReason.None
                         ? typeReason
-                        : MethodSelector.Evaluate(member);
+                        : MethodSelector.Evaluate(member, MethodSelector.Backend.Cecil);
 
                     ParameterInfo[] parameters = member.GetParameters();
                     var plan = new MemberPlan
