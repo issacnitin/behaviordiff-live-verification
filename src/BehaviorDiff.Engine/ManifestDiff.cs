@@ -79,7 +79,6 @@ namespace BehaviorDiff.Engine
 
                 AddFlagGap(gaps, name, "sourceUnavailable", baseEntry?.SourceUnavailable, prEntry?.SourceUnavailable);
                 AddFlagGap(gaps, name, "sourcePartial", baseEntry?.SourcePartial, prEntry?.SourcePartial);
-                AddFlagGap(gaps, name, "latePatched", baseEntry?.LatePatched, prEntry?.LatePatched);
             }
 
             return gaps;

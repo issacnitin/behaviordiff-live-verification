@@ -29,7 +29,6 @@ namespace BehaviorDiff.Contracts
     /// <b>Calls that happen before a member is patched are unobservable by construction.</b> An unpatched
     /// member runs no tracer code, so nothing counts it. No field here reports how many calls were missed,
     /// because the tracer cannot know. <see cref="TracedCalls"/> is what was seen, not what happened, and a
-    /// <see cref="LatePatched"/> assembly reporting zero traced calls means the tracer has no information
     /// about that assembly rather than that nothing ran.
     /// </para>
     /// </remarks>
@@ -66,7 +65,6 @@ namespace BehaviorDiff.Contracts
         /// Patched after startup enumeration had finished, so target code could already have been running.
         /// The engine treats divergences involving these assemblies as unverified.
         /// </summary>
-        public bool LatePatched { get; init; }
 
         /// <summary>
         /// Trace events emitted from members of this assembly over the whole run. A count of what was
@@ -75,12 +73,10 @@ namespace BehaviorDiff.Contracts
         public long TracedCalls { get; init; }
 
         /// <summary>
-        /// Set to "unknown" when <see cref="LatePatched"/> is true: calls between the assembly loading and
         /// patching completing cannot be seen. Absent otherwise, meaning the assembly was patched during
         /// startup enumeration. Absence is not a claim that no calls were missed, only that the unobserved
         /// window closed before the drain thread started.
         /// </summary>
-        public string? PrePatchCoverage { get; init; }
 
         /// <summary>
         /// This assembly references a test framework, so everything it declares is harness code.

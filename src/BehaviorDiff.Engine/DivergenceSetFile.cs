@@ -121,7 +121,6 @@ namespace BehaviorDiff.Engine
     {
         [JsonPropertyName("assembly")] public string Assembly { get; set; } = string.Empty;
 
-        [JsonPropertyName("latePatched")] public bool LatePatched { get; set; }
 
         [JsonPropertyName("sourcePartial")] public bool SourcePartial { get; set; }
     }
@@ -158,7 +157,7 @@ namespace BehaviorDiff.Engine
                 throw new DiffInputException("DivergenceSet is empty: " + path);
             }
 
-            if (!string.Equals(file.Schema, "behaviordiff.divergenceset/1", StringComparison.Ordinal))
+            if (!string.Equals(file.Schema, "behaviordiff.divergenceset/2", StringComparison.Ordinal))
             {
                 throw new DiffInputException("Unexpected schema '" + file.Schema + "' in " + path);
             }

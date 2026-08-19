@@ -460,7 +460,7 @@ namespace BehaviorDiff.Engine
         {
             var artifact = new
             {
-                schema = "behaviordiff.divergenceset/1",
+                schema = "behaviordiff.divergenceset/2",
                 generatedUtc = DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture),
                 runs = new
                 {
@@ -537,7 +537,6 @@ namespace BehaviorDiff.Engine
                     {
                         assembly = a.Assembly,
                         instrumented = a.Instrumented,
-                        latePatched = a.LatePatched,
                         sourcePartial = a.SourcePartial,
                         sourceUnavailable = a.SourceUnavailable,
                     }).ToArray(),

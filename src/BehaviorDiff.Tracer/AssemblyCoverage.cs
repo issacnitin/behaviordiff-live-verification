@@ -46,7 +46,6 @@ namespace BehaviorDiff.Tracer
 
         internal long? PatchedAtMs { get; private set; }
 
-        internal bool LatePatched { get; private set; }
 
         internal bool Scanned { get; private set; }
 
@@ -119,7 +118,6 @@ namespace BehaviorDiff.Tracer
 
         /// <summary>
         /// Most but not all members have attributable source. Divergences on the members that do not get
-        /// degraded to frontier_unverified, the same treatment as skipped generics and LatePatched.
         /// </summary>
         /// <remarks>Only meaningful under the ratio rule; below the floor the band would be noise too.</remarks>
         internal bool SourcePartial =>
@@ -130,7 +128,6 @@ namespace BehaviorDiff.Tracer
         internal void MarkComplete(long patchedAtMs, bool afterStartup, bool scanned)
         {
             PatchedAtMs = patchedAtMs;
-            LatePatched = afterStartup;
             Scanned = scanned;
             Volatile.Write(ref _patchingComplete, 1);
         }
@@ -149,14 +146,12 @@ namespace BehaviorDiff.Tracer
                 PatchFailedMembers = PatchFailedMembers,
                 QueuedAtMs = QueuedAtMs,
                 PatchedAtMs = PatchedAtMs,
-                LatePatched = LatePatched,
                 TracedCalls = Interlocked.Read(ref _tracedCalls),
                 MembersWithExactSource = Volatile.Read(ref _membersWithExactSource),
                 ExactSourcePercent = ExactSourcePercent,
                 SourceRuleApplied = SourceRuleApplied,
                 SourceUnavailable = SourceUnavailable,
                 SourcePartial = SourcePartial,
-                PrePatchCoverage = LatePatched ? "unknown" : null,
                 IsTestAssembly = IsTestAssembly,
                 TestFrameworkReference = TestFrameworkReference,
                 Detail = Detail,

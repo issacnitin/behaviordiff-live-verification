@@ -112,9 +112,7 @@ namespace BehaviorDiff.Contracts
         public const string PatchFailedMembersField = "patchFailedMembers";
         public const string QueuedAtMsField = "queuedAtMs";
         public const string PatchedAtMsField = "patchedAtMs";
-        public const string LatePatchedField = "latePatched";
         public const string TracedCallsField = "tracedCalls";
-        public const string PrePatchCoverageField = "prePatchCoverage";
         public const string MembersWithExactSourceField = "membersWithExactSource";
         public const string SourceUnavailableField = "sourceUnavailable";
         public const string SourcePartialField = "sourcePartial";
@@ -228,17 +226,6 @@ namespace BehaviorDiff.Contracts
                 AppendNumber(builder, PatchedAtMsField, entry.PatchedAtMs.Value, first: false);
             }
 
-            if (entry.LatePatched)
-            {
-                AppendBoolean(builder, LatePatchedField, true, first: false);
-            }
-            else if (entry.Discovery == AssemblyDiscovery.BuildTimeWeave)
-            {
-                // Structurally impossible for a woven assembly: written rather than omitted so a reader
-                // never has to distinguish "false" from "absent".
-                AppendBoolean(builder, LatePatchedField, false, first: false);
-            }
-
             AppendNumber(builder, TracedCallsField, entry.TracedCalls, first: false);
             AppendNumber(builder, MembersWithExactSourceField, entry.MembersWithExactSource, first: false);
             AppendNumber(builder, ExactSourcePercentField, entry.ExactSourcePercent, first: false);
@@ -254,9 +241,7 @@ namespace BehaviorDiff.Contracts
                 AppendBoolean(builder, SourceUnavailableField, true, first: false);
             }
 
-            if (entry.PrePatchCoverage != null)
             {
-                AppendString(builder, PrePatchCoverageField, entry.PrePatchCoverage, first: false);
             }
 
             if (entry.IsTestAssembly)
@@ -429,10 +414,11 @@ namespace BehaviorDiff.Contracts
                     return false;
             }
 
-            if (discovery == AssemblyDiscovery.BuildTimeWeave && GetBoolean(fields, LatePatchedField))
+            // Retired with the runtime patcher. Its presence means a manifest written before build-time
+            // weaving, whose coverage claims are about a different instrumentation model.
+            if (fields.ContainsKey("latePatched") || fields.ContainsKey("prePatchCoverage"))
             {
-                error = LatePatchedField + " cannot be true when " + DiscoveryField + " is "
-                    + nameof(AssemblyDiscovery.BuildTimeWeave);
+                error = "manifest carries retired field latePatched/prePatchCoverage; it predates build-time weaving";
                 return false;
             }
 
@@ -447,14 +433,12 @@ namespace BehaviorDiff.Contracts
                 PatchFailedMembers = (int)(GetInt64(fields, PatchFailedMembersField) ?? 0),
                 QueuedAtMs = GetInt64(fields, QueuedAtMsField) ?? 0,
                 PatchedAtMs = GetInt64(fields, PatchedAtMsField),
-                LatePatched = GetBoolean(fields, LatePatchedField),
                 TracedCalls = GetInt64(fields, TracedCallsField) ?? 0,
                 MembersWithExactSource = (int)(GetInt64(fields, MembersWithExactSourceField) ?? 0),
                 ExactSourcePercent = (int)(GetInt64(fields, ExactSourcePercentField) ?? 0),
                 SourceRuleApplied = GetString(fields, SourceRuleAppliedField) ?? SourceRule.NotApplicable,
                 SourcePartial = GetBoolean(fields, SourcePartialField),
                 SourceUnavailable = GetBoolean(fields, SourceUnavailableField),
-                PrePatchCoverage = GetString(fields, PrePatchCoverageField),
                 IsTestAssembly = GetBoolean(fields, IsTestAssemblyField),
                 TestFrameworkReference = GetString(fields, TestFrameworkReferenceField),
                 Detail = GetString(fields, DetailField),

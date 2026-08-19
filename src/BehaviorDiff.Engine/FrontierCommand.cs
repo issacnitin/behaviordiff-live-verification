@@ -149,11 +149,10 @@ namespace BehaviorDiff.Engine
                 .Where(m => m.MethodFullName != null)
                 .GroupBy(m => m.MethodFullName!, StringComparer.Ordinal)
                 .ToDictionary(g => g.Key, g => g.First().Assembly, StringComparer.Ordinal);
-            // Woven assemblies never qualify: they carry instrumentation in the IL, so there is no
-            // pre-instrumentation window. ManifestNdjson rejects the contradictory combination at parse time.
-            var degradedAssemblies = set.Coverage.Assemblies
-                .Where(a => a.LatePatched)
-                .ToDictionary(a => a.Assembly, a => "LatePatched", StringComparer.Ordinal);
+// Nothing degrades a whole assembly any more: LatePatched was the only such reason and it
+                // went with the runtime patcher. Kept as an empty map so the per-member downgrades below,
+                // which are still live, do not need restructuring when another assembly-wide reason appears.
+                var degradedAssemblies = new Dictionary<string, string>(StringComparer.Ordinal);
 
             // Per member, not per assembly. SourcePartial is a rollup, so keying on it downgrades every
             // node in a partially-resolved assembly whether or not the descendant in question is the
@@ -579,7 +578,7 @@ namespace BehaviorDiff.Engine
         {
             var report = new
             {
-                schema = "behaviordiff.frontierreport/1",
+                schema = "behaviordiff.frontierreport/2",
                 generatedUtc = DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture),
                 counts = new
                 {
