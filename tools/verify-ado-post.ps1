@@ -185,7 +185,7 @@ try {
     $refusalPatch = $patches | Where-Object { $_.body -match 'analysis could not complete' } | Select-Object -First 1
     if (-not $refusalPatch -or $refusalPatch.body -notmatch 'no safety verdict') { throw 'refusal did not overwrite summary with an explicit non-verdict' }
 
-    $cleanPatch = $patches | Where-Object { $_.body -match 'No unexpected behavior changes across 1 edited files \(1 members, 5 call sites observed\)' } | Select-Object -First 1
+    $cleanPatch = $patches | Where-Object { $_.body -match 'No unexpected behavior changes across 1 edited files \(1 member, 5 call sites observed\)' } | Select-Object -First 1
     if (-not $cleanPatch) { throw 'clean summary omitted coverage-qualified wording' }
     if ($cleanPatch.body -match '\bNo findings\b') { throw 'clean summary used an unqualified all-clear' }
 

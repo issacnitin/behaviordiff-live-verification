@@ -200,8 +200,10 @@ namespace BehaviorDiff.Cli
             if (unexpectedMembers == 0)
             {
                 builder.AppendLine("**No unexpected behavior changes across " + Int(summary, "editedFiles")
-                    + " edited files (" + Int(summary, "tracedMembers") + " members, "
-                    + Int(summary, "observedCallSites") + " call sites observed).**");
+                    + " edited files (" + Int(summary, "tracedMembers")
+                    + (Int(summary, "tracedMembers") == 1 ? " member, " : " members, ")
+                    + Int(summary, "observedCallSites")
+                    + (Int(summary, "observedCallSites") == 1 ? " call site observed).**" : " call sites observed).**"));
             }
             else
             {
@@ -229,9 +231,13 @@ namespace BehaviorDiff.Cli
             builder.AppendLine("### Edited-code coverage");
             builder.AppendLine("**" + Int(summary, "exercisedEditedFiles") + " of "
                 + Int(summary, "editedFiles") + " edited files were exercised by tests.**");
-            builder.AppendLine(Int(summary, "tracedMembers") + " members, "
-                + Int(summary, "observedCallSites") + " call sites, and "
-                + Int(summary, "totalCallCount") + " total calls were observed in representative base/PR runs.");
+            int members = Int(summary, "tracedMembers");
+            int callSites = Int(summary, "observedCallSites");
+            int calls = Int(summary, "totalCallCount");
+            builder.AppendLine(members + (members == 1 ? " member, " : " members, ")
+                + callSites + (callSites == 1 ? " call site, and " : " call sites, and ")
+                + calls + (calls == 1 ? " total call was" : " total calls were")
+                + " observed in representative base/PR runs.");
 
             JsonElement[] unexercised = coverage.GetProperty("files").EnumerateArray()
                 .Where(file => !Bool(file, "exercised"))
