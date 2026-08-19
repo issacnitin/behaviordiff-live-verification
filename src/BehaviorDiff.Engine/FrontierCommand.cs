@@ -342,6 +342,42 @@ namespace BehaviorDiff.Engine
                     + "' traced='" + (tracePaths.FirstOrDefault() ?? "<none>") + "'.");
             }
 
+            // The edited code produced no observable events, so nothing can be attributed to it. Every node
+            // would be reported as an UNEXPECTED change in an unedited file, which reads as a confident
+            // finding about code that was never the subject. That is worse than reporting nothing.
+            bool unattributable = changed.Count > 0 && nodes.Count > 0 && exactMatches == 0;
+            if (unattributable)
+            {
+                var reasons = new List<string>();
+                foreach (string file in changed)
+                {
+                    string stem = Path.GetFileNameWithoutExtension(file);
+                    if (stem.Length == 0)
+                    {
+                        continue;
+                    }
+
+                    string[] why = set.Coverage.Members
+                        .Where(m => m.MethodFullName != null
+                            && !string.IsNullOrEmpty(m.SkipReason)
+                            && string.Equals(DeclaringTypeSimpleName(m.MethodFullName!), stem, StringComparison.Ordinal))
+                        .GroupBy(m => m.SkipReason!, StringComparer.Ordinal)
+                        .OrderByDescending(g => g.Count())
+                        .Select(g => g.Key + " x" + g.Count())
+                        .ToArray();
+
+                    reasons.Add("      " + file + " -> "
+                        + (why.Length == 0 ? "no member of this file reached the manifest" : string.Join(", ", why)));
+                }
+
+                refusals.Add("ATTRIBUTION: none of the " + changed.Count + " changed file(s) contributed a single "
+                    + "traced member, so all " + nodes.Count + " frontier node(s) would be reported as UNEXPECTED "
+                    + "changes in files the PR never touched. The edited code was not observed, so this run cannot "
+                    + "attribute anything." + Environment.NewLine
+                    + "    changed files and why their members were not instrumented:" + Environment.NewLine
+                    + string.Join(Environment.NewLine, reasons));
+            }
+
             foreach (FrontierNode node in nodes)
             {
                 node.Attribution = node.FilePath != null && changed.Contains(node.FilePath) ? "EXPECTED" : "UNEXPECTED";
@@ -361,7 +397,8 @@ namespace BehaviorDiff.Engine
                     Console.Error.WriteLine("  - " + refusal);
                 }
 
-                return 4;
+                // An unattributable run is invalid input, not a malformed trace.
+                return unattributable ? 3 : 4;
             }
 
             Console.WriteLine();
@@ -450,6 +487,16 @@ namespace BehaviorDiff.Engine
             string qualified = paren < 0 ? methodFullName : methodFullName.Substring(0, paren);
             int lastDot = qualified.LastIndexOf('.');
             return lastDot < 0 ? qualified : qualified.Substring(0, lastDot).TrimEnd('.');
+        }
+
+        /// <summary>Simple type name without generic arity, so it can be matched against a source file stem.</summary>
+        private static string DeclaringTypeSimpleName(string methodFullName)
+        {
+            string qualified = DeclaringType(methodFullName);
+            int dot = qualified.LastIndexOf('.');
+            string simple = dot < 0 ? qualified : qualified.Substring(dot + 1);
+            int tick = simple.IndexOf('`');
+            return tick < 0 ? simple : simple.Substring(0, tick);
         }
 
         private static HashSet<string> LoadChangedFiles(string path)
