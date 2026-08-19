@@ -56,14 +56,15 @@ try {
     $explicitExit = $LASTEXITCODE
     $explicitText = $explicitOutput -join "`n"
     $explicitOutput | Select-Object -First 9
-    if ($explicitExit -ne 4) { throw "explicit path expected the later no-test-project refusal (4), got $explicitExit" }
+    if ($explicitExit -ne 3) { throw "explicit path expected early no-test-project refusal (3), got $explicitExit" }
     if ($explicitText -notmatch 'changed from merge base: 2') { throw 'explicit path did not use the merge base' }
     if ($explicitText -match 'CI provider') { throw 'explicit path unexpectedly entered CI resolution' }
+    if ($explicitText -match '=== 3\. repo builds unmodified ===') { throw 'no-test refusal happened after build work began' }
     $failedDocument = Get-Content $failedFindings -Raw | ConvertFrom-Json
-    if ($failedDocument.status -ne 'failed' -or $failedDocument.isCleanResult -ne $false) { throw 'failed findings arm is not structurally invalid' }
-    if ($null -ne $failedDocument.members) { throw 'failed findings must omit members rather than serialize an empty array' }
+    if ($failedDocument.status -ne 'refused' -or $failedDocument.isCleanResult -ne $false) { throw 'no-test findings arm is not structurally refused' }
+    if ($null -ne $failedDocument.members) { throw 'refused findings must omit members rather than serialize an empty array' }
     Write-Host 'PASS: explicit <repo> --base <ref> --pr <ref> remains the default' -ForegroundColor Green
-    Write-Host 'PASS: failed findings has no members arm and isCleanResult=false' -ForegroundColor Green
+    Write-Host 'PASS: no-test repository refused with exit 3 before either build' -ForegroundColor Green
 
     Write-Host ''
 
@@ -85,9 +86,9 @@ try {
     $text = $output -join "`n"
     $output | Select-Object -First 20
 
-    # Exit 4 is expected because this deliberately tiny git fixture has no xunit project. Ref resolution
+    # Exit 3 is expected because this deliberately tiny git fixture has no xunit project. Ref resolution
     # has already completed and printed its measured changed-file set before the scan refuses.
-    if ($exit -ne 4) { throw "expected the later no-test-project refusal (4), got $exit" }
+    if ($exit -ne 3) { throw "expected the early no-test-project refusal (3), got $exit" }
     if ($text -notmatch [regex]::Escape("base       : refs/heads/target -> $target")) { throw 'target SHA was not resolved from merge parent one' }
     if ($text -notmatch [regex]::Escape("pr         : refs/heads/source -> $source")) { throw 'source SHA was not resolved from merge parent two' }
     if ($text -notmatch [regex]::Escape("merge base : $common")) { throw 'wrong merge base' }

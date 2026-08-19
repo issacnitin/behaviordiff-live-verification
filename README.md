@@ -18,7 +18,8 @@ The finding that matters is the one in a file the pull request never touched.
    The three base runs establish which behavior is nondeterministic, so that nondeterminism is not
    charged to the PR.
 3. **Diff.** Events are matched on `(test, member)`. Differences that also appear between base runs are
-   excluded as noise. What remains is a divergence.
+   excluded as noise. What remains is a divergence. Every edited file is also reported with its
+   executed members, call sites, and base/PR call counts; zero is retained as "not observed," not clean.
 4. **Frontier.** Divergences are placed in the call tree, and the *shallowest* diverging call in each
    subtree is the finding — its diverging descendants are collateral, not separate findings. Each
    finding is attributed EXPECTED (in a file the PR edited) or UNEXPECTED (not).
@@ -120,6 +121,12 @@ platform limitation and the exact file/line instead of pretending the thread was
 
 These are deliberate and measured, not unknowns.
 
+**BehaviorDiff analyzes executed code only.** A method that no selected test calls has no runtime
+history to compare. Every changed file therefore carries execution coverage: traced members, distinct
+`(test, member)` call sites, and raw calls in one representative base run plus the PR run. A zero row
+means "not observed" and supports no claim about unchanged behavior. BehaviorDiff complements static
+analysis; it does not replace it.
+
 **Source-generated members are unreachable by path attribution.** A method emitted by a source
 generator lives under `obj/`, and no git diff will ever name that file. FluentValidation #2136 adds four
 such members, including one with 822 calls. The tool reports them as `source-generated, not in the git
@@ -175,6 +182,7 @@ pwsh -File tools/verify-null-task.ps1        # the null-Task path emits exactly 
 pwsh -File tools/verify-diff.ps1 -Mutate -Change config
 pwsh -File tools/verify-ci-refs.ps1          # merge-base refs and invalid findings arms
 pwsh -File tools/verify-github-refs.ps1      # event SHAs and shallow-clone refusal
+pwsh -File tools/verify-coverage.ps1         # per-file execution coverage and zero-row honesty
 pwsh -File tools/verify-mcp.ps1              # MCP reads canonical findings.json
 pwsh -File tools/verify-ado-post.ps1         # local ADO REST contract and idempotency
 pwsh -File tools/verify-pipeline.ps1         # mocked end-to-end CI seams

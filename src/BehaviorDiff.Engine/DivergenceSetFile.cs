@@ -28,6 +28,8 @@ namespace BehaviorDiff.Engine
         [JsonPropertyName("coverage")] public CoverageDto Coverage { get; set; } = new();
 
         [JsonPropertyName("callTree")] public List<CallNodeDto> CallTree { get; set; } = new();
+
+        [JsonPropertyName("prCallTree")] public List<CallNodeDto> PrCallTree { get; set; } = new();
     }
 
     internal sealed class CountsDto

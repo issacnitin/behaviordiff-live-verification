@@ -13,6 +13,7 @@ $cli = Join-Path $repo 'src/BehaviorDiff.Cli/BehaviorDiff.Cli.csproj'
 $findings = Join-Path ([System.IO.Path]::GetTempPath()) 'behaviordiff-diff/findings.json'
 $recording = Join-Path ([System.IO.Path]::GetTempPath()) 'behaviordiff-ado-mock.ndjson'
 $refusal = Join-Path ([System.IO.Path]::GetTempPath()) 'behaviordiff-ado-refusal.json'
+$clean = Join-Path ([System.IO.Path]::GetTempPath()) 'behaviordiff-ado-clean.json'
 $ready = Join-Path ([System.IO.Path]::GetTempPath()) 'behaviordiff-ado-mock.ready'
 $port = 18741
 
@@ -20,13 +21,23 @@ if (-not (Test-Path $findings)) {
     throw "missing real SampleApp findings at $findings - run: pwsh tools/verify-diff.ps1 -Mutate -Change config"
 }
 
-Remove-Item $recording, $refusal, $ready -Force -ErrorAction SilentlyContinue
+Remove-Item $recording, $refusal, $clean, $ready -Force -ErrorAction SilentlyContinue
 @{
     schema = 'behaviordiff.findings/1'; status = 'refused'; verdict = 'could_not_analyze'
     isCleanResult = $false; exitCode = 3; exitReason = 'analysis_refused'
     refs = @{ baseSha = 'base'; prSha = 'pr'; mergeBaseSha = 'merge-base' }
     refusal = @{ reason = 'CALL TREE: parent links were incomplete; no safety verdict was produced.' }
 } | ConvertTo-Json -Depth 5 | Set-Content $refusal
+
+$cleanDocument = Get-Content $findings -Raw | ConvertFrom-Json
+$cleanDocument.verdict = 'clean'
+$cleanDocument.isCleanResult = $true
+$cleanDocument.exitCode = 0
+$cleanDocument.exitReason = 'analyzed_no_unexpected'
+$cleanDocument.summary.unexpectedMembers = 0
+$cleanDocument.summary.unexpectedCallSites = 0
+$cleanDocument.members = @($cleanDocument.members | Where-Object attribution -ne 'unexpected')
+$cleanDocument | ConvertTo-Json -Depth 20 | Set-Content $clean
 
 $server = Start-Job -ArgumentList $port, $recording, $ready -ScriptBlock {
     param($port, $recording, $ready)
@@ -145,21 +156,26 @@ try {
     & (Join-Path $PSScriptRoot 'Post-AdoFallback.ps1') -Findings $refusal
     if ($LASTEXITCODE -ne 0) { throw "fallback poster returned $LASTEXITCODE" }
 
+    Write-Host '=== clean result remains coverage-qualified ===' -ForegroundColor Cyan
+    dotnet run --project $cli -c Release --no-build -- post --provider=azuredevops --findings $clean
+    if ($LASTEXITCODE -ne 0) { throw "clean post returned $LASTEXITCODE" }
+
     $deadline = [DateTime]::UtcNow.AddSeconds(5)
     do {
         $requests = if (Test-Path $recording) { @(Get-Content $recording | ConvertFrom-Json) } else { @() }
-    } while ($requests.Count -lt 13 -and [DateTime]::UtcNow -lt $deadline)
+    } while ($requests.Count -lt 15 -and [DateTime]::UtcNow -lt $deadline)
 
     $posts = @($requests | Where-Object method -eq 'POST')
     $patches = @($requests | Where-Object method -eq 'PATCH')
     $gets = @($requests | Where-Object method -eq 'GET')
     if ($posts.Count -ne 2) { throw "idempotency failed: expected exactly 2 creates total, got $($posts.Count)" }
-    if ($patches.Count -ne 6) { throw "expected 6 updates across re-push/refusal/gate/fallback, got $($patches.Count)" }
-    if ($gets.Count -ne 5) { throw "expected one list call per invocation, got $($gets.Count)" }
+    if ($patches.Count -ne 7) { throw "expected 7 updates across re-push/refusal/gate/fallback/clean, got $($patches.Count)" }
+    if ($gets.Count -ne 6) { throw "expected one list call per invocation, got $($gets.Count)" }
 
     $summary = $posts | Where-Object { $_.body -match 'behaviordiff:pr:314:summary' } | Select-Object -First 1
     $member = $posts | Where-Object { $_.body -match 'behaviordiff:pr:314:member:' } | Select-Object -First 1
     if (-not $summary -or -not $member) { throw 'summary/member marker missing from create payloads' }
+    if ($summary.body.IndexOf('Edited-code coverage') -gt $summary.body.IndexOf('UNEXPECTED')) { throw 'coverage did not precede finding count' }
     if ($summary.body.IndexOf('UNEXPECTED') -gt $summary.body.IndexOf('EXPECTED')) { throw 'summary did not put UNEXPECTED first' }
     $memberBody = $member.body | ConvertFrom-Json
     if ($memberBody.threadContext.filePath -ne '/samples/SampleApp/ShippingCalculator.cs') { throw 'wrong anchored file path' }
@@ -169,11 +185,16 @@ try {
     $refusalPatch = $patches | Where-Object { $_.body -match 'analysis could not complete' } | Select-Object -First 1
     if (-not $refusalPatch -or $refusalPatch.body -notmatch 'no safety verdict') { throw 'refusal did not overwrite summary with an explicit non-verdict' }
 
+    $cleanPatch = $patches | Where-Object { $_.body -match 'No unexpected behavior changes across 1 edited files \(1 members, 5 call sites observed\)' } | Select-Object -First 1
+    if (-not $cleanPatch) { throw 'clean summary omitted coverage-qualified wording' }
+    if ($cleanPatch.body -match '\bNo findings\b') { throw 'clean summary used an unqualified all-clear' }
+
     Write-Host 'PASS: first run POSTed one summary and one line-anchored member thread' -ForegroundColor Green
     Write-Host 'PASS: re-push PATCHed existing comments; total POST count stayed at 2' -ForegroundColor Green
     Write-Host 'PASS: refusal PATCHed the summary with the reason; never posted silence' -ForegroundColor Green
     Write-Host 'PASS: warn-only returned 0; fail-on-findings returned 1' -ForegroundColor Green
     Write-Host 'PASS: script-only fallback PATCHed the existing summary; no duplicate POST' -ForegroundColor Green
+    Write-Host 'PASS: coverage precedes findings and clean wording remains coverage-qualified' -ForegroundColor Green
 }
 finally {
     Stop-Job $server -ErrorAction SilentlyContinue

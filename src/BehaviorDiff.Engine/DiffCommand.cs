@@ -555,6 +555,17 @@ namespace BehaviorDiff.Engine
                     line = e.Event.Line,
                     process = e.ProcessKey,
                 }).ToArray(),
+                prCallTree = pr.Events.Select(e => new
+                {
+                    callId = e.Event.CallId,
+                    parentCallId = e.Event.ParentCallId,
+                    testId = e.Event.TestId,
+                    methodFullName = e.Event.MethodFullName,
+                    isHarness = e.Event.IsHarness,
+                    filePath = e.RelativePath,
+                    line = e.Event.Line,
+                    process = e.ProcessKey,
+                }).ToArray(),
             };
 
             string json = JsonSerializer.Serialize(artifact, new JsonSerializerOptions { WriteIndented = true });

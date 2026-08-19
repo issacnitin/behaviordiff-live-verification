@@ -43,6 +43,23 @@ namespace BehaviorDiff.Engine
         internal string Attribution { get; set; } = "UNEXPECTED";
     }
 
+    internal sealed class ChangedFileCoverage
+    {
+        internal string FilePath { get; init; } = string.Empty;
+
+        internal int TracedMembers { get; init; }
+
+        internal int CallSites { get; init; }
+
+        internal int BaseCallCount { get; init; }
+
+        internal int PrCallCount { get; init; }
+
+        internal int TotalCallCount => BaseCallCount + PrCallCount;
+
+        internal bool Exercised => TotalCallCount > 0;
+    }
+
     /// <summary>
     /// Part 2: locates where each change originated, suppresses everything that merely propagated up from
     /// it, and splits the survivors by whether the file was edited.
@@ -319,6 +336,9 @@ namespace BehaviorDiff.Engine
                 Console.WriteLine("    " + file);
             }
 
+            List<ChangedFileCoverage> changedFileCoverage = BuildChangedFileCoverage(set, changed);
+            PrintChangedFileCoverage(changedFileCoverage);
+
             if (changed.Count == 0)
             {
                 // Only a problem when there is something to attribute. With no frontier nodes there is
@@ -440,7 +460,16 @@ namespace BehaviorDiff.Engine
                 Console.WriteLine("    " + node.MethodFullName + "  [" + node.TestId + "]");
             }
 
-            WriteReport(options, set, nodes, collateral, divergedKeys.Count, changed, exactMatches, namespaceMatches);
+            WriteReport(
+                options,
+                set,
+                nodes,
+                collateral,
+                divergedKeys.Count,
+                changed,
+                changedFileCoverage,
+                exactMatches,
+                namespaceMatches);
             Console.WriteLine();
             Console.WriteLine("Frontier report written: " + Path.GetFullPath(options.Output));
             return 0;
@@ -574,6 +603,64 @@ namespace BehaviorDiff.Engine
             return changed;
         }
 
+        private static List<ChangedFileCoverage> BuildChangedFileCoverage(
+            DivergenceSetFile set,
+            IEnumerable<string> changedFiles)
+        {
+            var result = new List<ChangedFileCoverage>();
+            foreach (string file in changedFiles.OrderBy(path => path, StringComparer.Ordinal))
+            {
+                List<CallNodeDto> baseCalls = set.CallTree
+                    .Where(call => !call.IsHarness && string.Equals(call.FilePath, file, StringComparison.Ordinal))
+                    .ToList();
+                List<CallNodeDto> prCalls = set.PrCallTree
+                    .Where(call => !call.IsHarness && string.Equals(call.FilePath, file, StringComparison.Ordinal))
+                    .ToList();
+
+                int members = baseCalls.Concat(prCalls)
+                    .Select(call => call.MethodFullName)
+                    .Distinct(StringComparer.Ordinal)
+                    .Count();
+                int callSites = baseCalls.Concat(prCalls)
+                    .Select(call => call.TestId + "|" + call.MethodFullName)
+                    .Distinct(StringComparer.Ordinal)
+                    .Count();
+
+                result.Add(new ChangedFileCoverage
+                {
+                    FilePath = file,
+                    TracedMembers = members,
+                    CallSites = callSites,
+                    BaseCallCount = baseCalls.Count,
+                    PrCallCount = prCalls.Count,
+                });
+            }
+
+            return result;
+        }
+
+        private static void PrintChangedFileCoverage(IReadOnlyList<ChangedFileCoverage> coverage)
+        {
+            Console.WriteLine();
+            Console.WriteLine("=== changed-file coverage ===");
+            Console.WriteLine("  exercised edited files  : " + coverage.Count(file => file.Exercised)
+                + " of " + coverage.Count);
+            Console.WriteLine("  traced members          : " + coverage.Sum(file => file.TracedMembers));
+            Console.WriteLine("  observed call sites     : " + coverage.Sum(file => file.CallSites));
+            Console.WriteLine("  total calls             : " + coverage.Sum(file => file.TotalCallCount)
+                + " (base=" + coverage.Sum(file => file.BaseCallCount)
+                + " pr=" + coverage.Sum(file => file.PrCallCount) + ")");
+            foreach (ChangedFileCoverage file in coverage)
+            {
+                Console.WriteLine("    " + (file.Exercised ? "EXERCISED    " : "NOT EXERCISED") + "  "
+                    + file.FilePath + "  members=" + file.TracedMembers
+                    + " callSites=" + file.CallSites
+                    + " calls=" + file.TotalCallCount
+                    + " (base=" + file.BaseCallCount + " pr=" + file.PrCallCount + ")"
+                    + (file.Exercised ? string.Empty : "  [no behavioral claim]"));
+            }
+        }
+
         private static void WriteReport(
             FrontierOptions options,
             DivergenceSetFile set,
@@ -581,6 +668,7 @@ namespace BehaviorDiff.Engine
             List<FrontierNode> collateral,
             int divergedKeyCount,
             HashSet<string> changed,
+            List<ChangedFileCoverage> changedFileCoverage,
             int exactMatches,
             int namespaceMatches)
         {
@@ -606,6 +694,32 @@ namespace BehaviorDiff.Engine
                     changedFiles = changed.OrderBy(c => c, StringComparer.Ordinal).ToArray(),
                     changedPathsMatchingATracedFile = exactMatches,
                     changedPathsInTracePathNamespace = namespaceMatches,
+                },
+                changedFileCoverage = new
+                {
+                    summary = new
+                    {
+                        editedFiles = changedFileCoverage.Count,
+                        exercisedEditedFiles = changedFileCoverage.Count(file => file.Exercised),
+                        tracedMembers = changedFileCoverage.Sum(file => file.TracedMembers),
+                        observedCallSites = changedFileCoverage.Sum(file => file.CallSites),
+                        baseCallCount = changedFileCoverage.Sum(file => file.BaseCallCount),
+                        prCallCount = changedFileCoverage.Sum(file => file.PrCallCount),
+                        totalCallCount = changedFileCoverage.Sum(file => file.TotalCallCount),
+                    },
+                    files = changedFileCoverage.Select(file => new
+                    {
+                        filePath = file.FilePath,
+                        exercised = file.Exercised,
+                        tracedMembers = file.TracedMembers,
+                        observedCallSites = file.CallSites,
+                        baseCallCount = file.BaseCallCount,
+                        prCallCount = file.PrCallCount,
+                        totalCallCount = file.TotalCallCount,
+                        interpretation = file.Exercised
+                            ? "executed by tests in the representative base or PR run"
+                            : "not observed; zero calls are not evidence of unchanged behavior",
+                    }).ToArray(),
                 },
                 frontier = nodes.Select(Describe).ToArray(),
 

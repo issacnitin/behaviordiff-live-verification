@@ -378,7 +378,8 @@ namespace BehaviorDiff.Cli
                     "No xunit test projects found. " + detail + Environment.NewLine
                     + "    The tracer stamps events with a TestId through an xunit BeforeAfterTestAttribute, so a "
                     + "non-xunit suite would run and produce a trace with no test identity - indistinguishable from "
-                    + "a clean result.");
+                    + "a clean result. Refusing before either worktree is built.",
+                    ExitCodes.RunInvalid);
             }
 
             if (scan.DebugTypeOverrides.Count > 0)
@@ -777,14 +778,28 @@ namespace BehaviorDiff.Cli
         {
             var report = System.Text.Json.JsonDocument.Parse(File.ReadAllText(reportPath));
             System.Text.Json.JsonElement counts = report.RootElement.GetProperty("counts");
+            System.Text.Json.JsonElement coverage = report.RootElement
+                .GetProperty("changedFileCoverage")
+                .GetProperty("summary");
             int unexpected = counts.GetProperty("unexpected").GetInt32();
             int expected = counts.GetProperty("expected").GetInt32();
             int untested = counts.GetProperty("untested").GetInt32();
+            int editedFiles = coverage.GetProperty("editedFiles").GetInt32();
+            int exercisedFiles = coverage.GetProperty("exercisedEditedFiles").GetInt32();
+            int tracedMembers = coverage.GetProperty("tracedMembers").GetInt32();
+            int observedCallSites = coverage.GetProperty("observedCallSites").GetInt32();
+            int totalCalls = coverage.GetProperty("totalCallCount").GetInt32();
 
             Console.WriteLine();
+            Console.WriteLine("COVERAGE: " + exercisedFiles + " of " + editedFiles
+                + " edited files were exercised by tests.");
+            Console.WriteLine("          " + tracedMembers + " members, " + observedCallSites
+                + " call sites, " + totalCalls + " total calls observed in representative base/PR runs.");
             if (unexpected == 0)
             {
-                Console.WriteLine("RESULT: ANALYZED, no unexpected behavior changes.");
+                Console.WriteLine("RESULT: ANALYZED. No unexpected behavior changes across " + editedFiles
+                    + " edited files (" + tracedMembers + " members, " + observedCallSites
+                    + " call sites observed).");
                 Console.WriteLine("        " + expected + " change(s) confined to edited files; " + untested + " untested.");
                 return ExitCodes.NoUnexpected;
             }

@@ -49,11 +49,13 @@ try {
     $exit = $LASTEXITCODE
     $text = $output -join "`n"
     $output | Select-Object -First 16
-    if ($exit -ne 4) { throw "expected later no-test-project failure 4, got $exit" }
+    if ($exit -ne 3) { throw "expected early no-test-project refusal 3, got $exit" }
+    if ($text -match '=== 3\. repo builds unmodified ===') { throw 'no-test refusal happened after build work began' }
     if ($text -notmatch [regex]::Escape("base       : github.event.pull_request.base.sha -> $base")) { throw 'base SHA did not come from event payload' }
     if ($text -notmatch [regex]::Escape("pr         : github.event.pull_request.head.sha -> $head")) { throw 'head SHA did not come from event payload' }
     if ($text -notmatch 'changed from merge base: 1') { throw 'wrong merge-base changed set' }
     Write-Host 'PASS: GitHub refs came from event payload SHAs, not branch names' -ForegroundColor Green
+    Write-Host 'PASS: no-test repository refused with exit 3 before either build' -ForegroundColor Green
 
     Write-Host ''
     Write-Host '=== fork posting refusal ===' -ForegroundColor Cyan
