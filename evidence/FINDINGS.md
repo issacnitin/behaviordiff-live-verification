@@ -230,6 +230,7 @@ successfully and produced equivalent analyzed artifacts:
 | --- | ---: | ---: | ---: | ---: |
 | [32266828793](https://github.com/issacnitin/behaviordiff-live-verification/actions/runs/32266828793) | 57 s | 33.10 s | 215,532 KB | 24,546,252 |
 | [32266826312](https://github.com/issacnitin/behaviordiff-live-verification/actions/runs/32266826312) | 61 s | 30.63 s | 217,276 KB | 24,557,295 |
+| [32269043390](https://github.com/issacnitin/behaviordiff-live-verification/actions/runs/32269043390) | 63 s | 37.14 s | 224,264 KB | 24,543,695 |
 
 The final `findings.json` was 2,055 bytes and reported:
 
@@ -240,6 +241,7 @@ UNEXPECTED  : 1 member, 2 call sites
 member      : SampleApp.ShippingCalculator.IsFreeShipping(System.Decimal)
 source      : samples/SampleApp/ShippingCalculator.cs:10
 observed    : Primitive:false -> Primitive:true (two tests)
+coverage    : 1 of 1 edited files; 1 member; 5 call sites; 10 calls
 ```
 
 GitHub updated one issue comment idempotently. The Markdown table and headings rendered correctly.

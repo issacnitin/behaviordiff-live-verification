@@ -112,8 +112,9 @@ nonblocking; it is never converted into an empty finding list.
 
 The GitHub path was verified on public PR
 [`issacnitin/behaviordiff-live-verification#1`](https://github.com/issacnitin/behaviordiff-live-verification/pull/1).
-The hosted run took 30.63 seconds inside BehaviorDiff, peaked at 217,276 KB RSS, and wrote 24,557,295
-trace bytes. GitHub accepted the idempotent summary comment. It rejected the attempted line comment
+The final coverage-aware hosted run took 37.14 seconds inside BehaviorDiff, peaked at 224,264 KB RSS,
+and wrote 24,543,695 trace bytes. It reported 1 of 1 edited files exercised (1 member, 5 call sites,
+10 calls). GitHub accepted the idempotent summary comment. It rejected the attempted line comment
 with HTTP 422 because the unexpected file is absent from the PR diff; the summary records that
 platform limitation and the exact file/line instead of pretending the thread was posted.
 
