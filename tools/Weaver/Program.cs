@@ -1,0 +1,443 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using BehaviorDiff.Tracer;
+using Mono.Cecil;
+using Mono.Cecil.Cil;
+using Mono.Cecil.Rocks;
+using MethodAttributes = Mono.Cecil.MethodAttributes;
+using MethodBody = Mono.Cecil.Cil.MethodBody;
+
+namespace BehaviorDiff.Weaver
+{
+    /// <summary>Imported references to the hook surface, resolved once per module.</summary>
+    internal sealed class Refs
+    {
+        internal Refs(ModuleDefinition module)
+        {
+            Type hooks = typeof(WeaveHooks);
+            RegisterAssembly = module.ImportReference(hooks.GetMethod(nameof(WeaveHooks.RegisterAssembly)));
+            Register = module.ImportReference(hooks.GetMethod(nameof(WeaveHooks.Register)));
+            RegisterSkipped = module.ImportReference(hooks.GetMethod(nameof(WeaveHooks.RegisterSkipped)));
+            Enter = module.ImportReference(hooks.GetMethod(nameof(WeaveHooks.Enter)));
+            ExitValue = module.ImportReference(hooks.GetMethod(nameof(WeaveHooks.ExitValue)));
+            ExitVoid = module.ImportReference(hooks.GetMethod(nameof(WeaveHooks.ExitVoid)));
+            ExitException = module.ImportReference(hooks.GetMethod(nameof(WeaveHooks.ExitException)));
+            ExceptionType = module.ImportReference(typeof(Exception));
+        }
+
+        internal MethodReference RegisterAssembly { get; }
+
+        internal MethodReference Register { get; }
+
+        internal MethodReference RegisterSkipped { get; }
+
+        internal MethodReference Enter { get; }
+
+        internal MethodReference ExitValue { get; }
+
+        internal MethodReference ExitVoid { get; }
+
+        internal MethodReference ExitException { get; }
+
+        internal TypeReference ExceptionType { get; }
+    }
+
+    internal static class Program
+    {
+        /// <summary>A weaver decline, not a MethodSelector skip: these are in Harmony's scope but not yet woven.</summary>
+        private const string AsyncDecline = "WeaverAsyncNotSupported";
+
+        private static int Main(string[] args)
+        {
+            string? assemblyPath = null;
+            string? include = null;
+            string? exclude = null;
+            bool isTestAssembly = false;
+
+            for (int i = 0; i < args.Length - 1; i++)
+            {
+                switch (args[i])
+                {
+                    case "--assembly": assemblyPath = args[++i]; break;
+                    case "--include": include = args[++i]; break;
+                    case "--exclude": exclude = args[++i]; break;
+                }
+            }
+
+            isTestAssembly = Array.IndexOf(args, "--test-assembly") >= 0;
+
+            if (assemblyPath is null || include is null)
+            {
+                Console.Error.WriteLine("usage: --assembly <dll> --include <ns,ns> [--exclude <ns,ns>] [--test-assembly]");
+                return 2;
+            }
+
+            var options = new TracerOptions
+            {
+                IncludeNamespacePrefixes = Split(include),
+                ExcludeNamespacePrefixes = Split(exclude),
+            };
+
+            Assembly reflected = Assembly.LoadFrom(assemblyPath);
+            List<MemberPlan> plans = Descriptors.Plan(reflected, options);
+
+            // Sync only this increment. Async stays in Harmony's scope, so it is declined, not skipped
+            // silently, and the equivalence run accounts for it explicitly.
+            foreach (MemberPlan plan in plans)
+            {
+                if (plan.SkipReason is null
+                    && plan.ReturnKind != ReturnKind.Void
+                    && plan.ReturnKind != ReturnKind.Sync)
+                {
+                    plan.SkipReason = AsyncDecline;
+                }
+            }
+
+            int index = 0;
+            foreach (MemberPlan plan in plans.Where(p => p.SkipReason is null))
+            {
+                plan.WeaveIndex = index++;
+            }
+
+            var resolver = new DefaultAssemblyResolver();
+            resolver.AddSearchDirectory(Path.GetDirectoryName(Path.GetFullPath(assemblyPath)));
+            var readerParameters = new ReaderParameters
+            {
+                ReadSymbols = true,
+                ReadWrite = false,
+                AssemblyResolver = resolver,
+            };
+
+            using ModuleDefinition module = ModuleDefinition.ReadModule(assemblyPath, readerParameters);
+            var refs = new Refs(module);
+
+            var byToken = new Dictionary<int, MethodDefinition>();
+            foreach (TypeDefinition type in module.GetTypes())
+            {
+                foreach (MethodDefinition method in type.Methods)
+                {
+                    byToken[method.MetadataToken.ToInt32()] = method;
+                }
+            }
+
+            var failures = new List<string>();
+            int woven = 0;
+
+            foreach (MemberPlan plan in plans.Where(p => p.SkipReason is null))
+            {
+                if (!byToken.TryGetValue(plan.Token, out MethodDefinition? target))
+                {
+                    failures.Add("no Cecil method for token 0x" + plan.Token.ToString("x8") + " " + plan.FullName);
+                    continue;
+                }
+
+                try
+                {
+                    VariableDefinition frameLocal = Weave(target, plan, refs);
+                    woven++;
+
+                    string? assertion = Verify(target, frameLocal, refs);
+                    if (assertion != null)
+                    {
+                        failures.Add(plan.FullName + ": " + assertion);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    failures.Add(plan.FullName + ": " + ex.GetType().Name + ": " + ex.Message);
+                    continue;
+                }
+            }
+
+            EmitModuleInitializer(module, plans, refs, reflected.GetName().Name ?? "unknown", isTestAssembly);
+
+            if (failures.Count > 0)
+            {
+                Console.Error.WriteLine("WEAVE FAILED (" + failures.Count + "):");
+                foreach (string failure in failures.Take(20))
+                {
+                    Console.Error.WriteLine("  " + failure);
+                }
+
+                return 1;
+            }
+
+            string outputPath = assemblyPath;
+            module.Write(outputPath + ".woven", new WriterParameters { WriteSymbols = true });
+
+            int declined = plans.Count(p => p.SkipReason == AsyncDecline);
+            int skipped = plans.Count(p => p.SkipReason != null && p.SkipReason != AsyncDecline);
+            Console.WriteLine("discovered : " + plans.Count);
+            Console.WriteLine("woven      : " + woven);
+            Console.WriteLine("skipped    : " + skipped + " (MethodSelector)");
+            Console.WriteLine("declined   : " + declined + " (" + AsyncDecline + ")");
+            Console.WriteLine("reconciles : " + (woven + skipped + declined == plans.Count));
+            Console.WriteLine("output     : " + outputPath + ".woven");
+            return woven + skipped + declined == plans.Count ? 0 : 1;
+        }
+
+        private static VariableDefinition Weave(MethodDefinition method, MemberPlan plan, Refs refs)
+        {
+            MethodBody body = method.Body;
+            body.SimplifyMacros();
+
+            // Without this the frame local is not zero-initialised and the body fails verification.
+            body.InitLocals = true;
+
+            ModuleDefinition module = method.Module;
+            var frame = new VariableDefinition(module.TypeSystem.Object);
+            body.Variables.Add(frame);
+
+            bool isVoid = method.ReturnType.FullName == "System.Void";
+            VariableDefinition? result = null;
+            if (!isVoid)
+            {
+                result = new VariableDefinition(method.ReturnType);
+                body.Variables.Add(result);
+            }
+
+            var caught = new VariableDefinition(refs.ExceptionType);
+            body.Variables.Add(caught);
+
+            ILProcessor il = body.GetILProcessor();
+            Instruction firstOriginal = body.Instructions[0];
+
+            // Epilogue first, so the rewritten returns have a branch target.
+            var epilogue = new List<Instruction> { Instruction.Create(OpCodes.Ldloc, frame) };
+            if (isVoid)
+            {
+                epilogue.Add(Instruction.Create(OpCodes.Call, refs.ExitVoid));
+            }
+            else
+            {
+                epilogue.Add(Instruction.Create(OpCodes.Ldloc, result));
+                if (NeedsBox(method.ReturnType))
+                {
+                    epilogue.Add(Instruction.Create(OpCodes.Box, method.ReturnType));
+                }
+
+                epilogue.Add(Instruction.Create(OpCodes.Call, refs.ExitValue));
+                epilogue.Add(Instruction.Create(OpCodes.Ldloc, result));
+            }
+
+            epilogue.Add(Instruction.Create(OpCodes.Ret));
+            Instruction afterTry = epilogue[0];
+
+            var handler = new List<Instruction>
+            {
+                Instruction.Create(OpCodes.Stloc, caught),
+                Instruction.Create(OpCodes.Ldloc, frame),
+                Instruction.Create(OpCodes.Ldloc, caught),
+                Instruction.Create(OpCodes.Call, refs.ExitException),
+                Instruction.Create(OpCodes.Rethrow),
+            };
+
+            // Rewrite returns before appending, so the originals are still the only ret instructions.
+            foreach (Instruction instruction in body.Instructions.Where(i => i.OpCode == OpCodes.Ret).ToList())
+            {
+                if (isVoid)
+                {
+                    instruction.OpCode = OpCodes.Leave;
+                    instruction.Operand = afterTry;
+                }
+                else
+                {
+                    Instruction store = Instruction.Create(OpCodes.Stloc, result);
+                    il.InsertBefore(instruction, store);
+                    instruction.OpCode = OpCodes.Leave;
+                    instruction.Operand = afterTry;
+                }
+            }
+
+            foreach (Instruction instruction in handler.Concat(epilogue))
+            {
+                il.Append(instruction);
+            }
+
+            // InsertBefore keeps insertion order, so the prologue is emitted forwards, not reversed.
+            foreach (Instruction instruction in BuildPrologue(method, plan, frame, refs))
+            {
+                il.InsertBefore(firstOriginal, instruction);
+            }
+
+            body.ExceptionHandlers.Add(new ExceptionHandler(ExceptionHandlerType.Catch)
+            {
+                CatchType = refs.ExceptionType,
+                TryStart = firstOriginal,
+                TryEnd = handler[0],
+                HandlerStart = handler[0],
+                HandlerEnd = afterTry,
+            });
+
+            body.OptimizeMacros();
+            return frame;
+        }
+
+        private static List<Instruction> BuildPrologue(
+            MethodDefinition method,
+            MemberPlan plan,
+            VariableDefinition frame,
+            Refs refs)
+        {
+            var instructions = new List<Instruction>
+            {
+                Instruction.Create(OpCodes.Ldc_I4, plan.WeaveIndex),
+                Instruction.Create(OpCodes.Ldc_I4, method.Parameters.Count),
+                Instruction.Create(OpCodes.Newarr, method.Module.TypeSystem.Object),
+            };
+
+            for (int i = 0; i < method.Parameters.Count; i++)
+            {
+                ParameterDefinition parameter = method.Parameters[i];
+                instructions.Add(Instruction.Create(OpCodes.Dup));
+                instructions.Add(Instruction.Create(OpCodes.Ldc_I4, i));
+                instructions.Add(Instruction.Create(OpCodes.Ldarg, parameter));
+                if (NeedsBox(parameter.ParameterType))
+                {
+                    instructions.Add(Instruction.Create(OpCodes.Box, parameter.ParameterType));
+                }
+
+                instructions.Add(Instruction.Create(OpCodes.Stelem_Ref));
+            }
+
+            instructions.Add(Instruction.Create(OpCodes.Call, refs.Enter));
+            instructions.Add(Instruction.Create(OpCodes.Stloc, frame));
+            return instructions;
+        }
+
+        private static bool NeedsBox(TypeReference type) =>
+            type.IsValueType || type.IsGenericParameter;
+
+        /// <summary>
+        /// Structural assertions. A frame that never reaches the handler yields no event, and a missing
+        /// event is indistinguishable from a behaviour change downstream, so this is a build error.
+        /// </summary>
+        private static string? Verify(MethodDefinition method, VariableDefinition frame, Refs refs)
+        {
+            MethodBody body = method.Body;
+
+            if (!body.Variables.Contains(frame))
+            {
+                return "frame local is missing";
+            }
+
+            foreach (ExceptionHandler handler in body.ExceptionHandlers)
+            {
+                if (handler.CatchType?.FullName != refs.ExceptionType.FullName)
+                {
+                    continue;
+                }
+
+                bool loadedFrame = false;
+                for (Instruction? i = handler.HandlerStart; i != null && i != handler.HandlerEnd; i = i.Next)
+                {
+                    if (LoadsLocal(i) == frame.Index)
+                    {
+                        loadedFrame = true;
+                    }
+
+                    if (i.OpCode == OpCodes.Call
+                        && i.Operand is MethodReference call
+                        && call.Name == refs.ExitException.Name
+                        && !loadedFrame)
+                    {
+                        return "handler calls ExitException without loading the frame local";
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>OptimizeMacros rewrites ldloc to operand-less short forms, so the index has to be recovered.</summary>
+        private static int LoadsLocal(Instruction instruction)
+        {
+            if (instruction.OpCode == OpCodes.Ldloc_0) return 0;
+            if (instruction.OpCode == OpCodes.Ldloc_1) return 1;
+            if (instruction.OpCode == OpCodes.Ldloc_2) return 2;
+            if (instruction.OpCode == OpCodes.Ldloc_3) return 3;
+            if ((instruction.OpCode == OpCodes.Ldloc || instruction.OpCode == OpCodes.Ldloc_S)
+                && instruction.Operand is VariableDefinition variable)
+            {
+                return variable.Index;
+            }
+
+            return -1;
+        }
+
+        private static void EmitModuleInitializer(
+            ModuleDefinition module,
+            List<MemberPlan> plans,
+            Refs refs,
+            string assemblyName,
+            bool isTestAssembly)
+        {
+            TypeDefinition moduleType = module.GetType("<Module>")
+                ?? throw new InvalidOperationException("no <Module> type");
+
+            MethodDefinition? cctor = moduleType.Methods.FirstOrDefault(m => m.Name == ".cctor");
+            if (cctor is null)
+            {
+                cctor = new MethodDefinition(
+                    ".cctor",
+                    MethodAttributes.Private | MethodAttributes.HideBySig | MethodAttributes.SpecialName
+                        | MethodAttributes.RTSpecialName | MethodAttributes.Static,
+                    module.TypeSystem.Void);
+                cctor.Body = new MethodBody(cctor);
+                cctor.Body.GetILProcessor().Append(Instruction.Create(OpCodes.Ret));
+                moduleType.Methods.Add(cctor);
+            }
+
+            var assemblyIndex = new VariableDefinition(module.TypeSystem.Int32);
+            cctor.Body.Variables.Add(assemblyIndex);
+            cctor.Body.InitLocals = true;
+
+            ILProcessor il = cctor.Body.GetILProcessor();
+            Instruction ret = cctor.Body.Instructions[cctor.Body.Instructions.Count - 1];
+
+            void Emit(Instruction instruction) => il.InsertBefore(ret, instruction);
+
+            Emit(Instruction.Create(OpCodes.Ldstr, assemblyName));
+            Emit(Instruction.Create(isTestAssembly ? OpCodes.Ldc_I4_1 : OpCodes.Ldc_I4_0));
+            Emit(Instruction.Create(OpCodes.Call, refs.RegisterAssembly));
+            Emit(Instruction.Create(OpCodes.Stloc, assemblyIndex));
+
+            foreach (MemberPlan plan in plans)
+            {
+                if (plan.SkipReason is null)
+                {
+                    Emit(Instruction.Create(OpCodes.Ldc_I4, plan.WeaveIndex));
+                    Emit(Instruction.Create(OpCodes.Ldloc, assemblyIndex));
+                    Emit(Instruction.Create(OpCodes.Ldstr, plan.FullName));
+                    Emit(plan.FilePath is null
+                        ? Instruction.Create(OpCodes.Ldnull)
+                        : Instruction.Create(OpCodes.Ldstr, plan.FilePath));
+                    Emit(Instruction.Create(OpCodes.Ldc_I4, plan.Line));
+                    Emit(Instruction.Create(OpCodes.Ldstr, plan.SourceResolution));
+                    Emit(Instruction.Create(OpCodes.Ldc_I4, (int)plan.ReturnKind));
+                    Emit(Instruction.Create(plan.IsTestRoot ? OpCodes.Ldc_I4_1 : OpCodes.Ldc_I4_0));
+                    Emit(Instruction.Create(OpCodes.Ldstr, string.Join(",", plan.ParameterNames)));
+                    Emit(Instruction.Create(OpCodes.Call, refs.Register));
+                }
+                else
+                {
+                    Emit(Instruction.Create(OpCodes.Ldloc, assemblyIndex));
+                    Emit(Instruction.Create(OpCodes.Ldstr, plan.FullName));
+                    Emit(Instruction.Create(OpCodes.Ldstr, plan.SkipReason));
+                    Emit(Instruction.Create(OpCodes.Ldstr, plan.ReturnKind.ToString()));
+                    Emit(Instruction.Create(plan.IsTestRoot ? OpCodes.Ldc_I4_1 : OpCodes.Ldc_I4_0));
+                    Emit(Instruction.Create(OpCodes.Ldstr, plan.SourceResolution));
+                    Emit(Instruction.Create(OpCodes.Call, refs.RegisterSkipped));
+                }
+            }
+        }
+
+        private static string[] Split(string? value) =>
+            string.IsNullOrEmpty(value)
+                ? new string[0]
+                : value!.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
+    }
+}
