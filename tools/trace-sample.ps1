@@ -20,7 +20,6 @@ $base = Join-Path $work 'run.ndjson'
 # measured directly - with only JitNoInline set, one-field-store constructors produced no events.
 # JITMinOpts is honoured in retail and disables inlining, at the cost of disabling every other
 # optimisation too.
-$env:DOTNET_JITMinOpts = '1'
 $env:BEHAVIORDIFF_TRACE = $base
 $env:BEHAVIORDIFF_NAMESPACES = 'SampleApp'
 $env:BEHAVIORDIFF_EXCLUDE_NAMESPACES = 'SampleApp.Diagnostics'

@@ -27,7 +27,6 @@ function Invoke-Suite([string]$stagedBin, [string]$outputDir) {
     Remove-Item $outputDir -Recurse -Force -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Path $outputDir | Out-Null
 
-    $env:DOTNET_JITMinOpts = '1'
     $env:BEHAVIORDIFF_NAMESPACES = 'SampleApp'
     $env:BEHAVIORDIFF_EXCLUDE_NAMESPACES = 'SampleApp.Diagnostics'
     $env:BEHAVIORDIFF_BACKEND = 'cecil'

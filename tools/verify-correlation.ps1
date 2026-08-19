@@ -8,7 +8,6 @@ events partition into tests, including for events that cross threads.
 $ErrorActionPreference = 'Stop'
 Set-Location (Split-Path $PSScriptRoot -Parent)
 
-$env:DOTNET_JITMinOpts = '1'
 $env:BEHAVIORDIFF_NAMESPACES = 'SampleApp'
 $env:BEHAVIORDIFF_EXCLUDE_NAMESPACES = 'SampleApp.Diagnostics'
 $env:BEHAVIORDIFF_BACKEND = 'cecil'

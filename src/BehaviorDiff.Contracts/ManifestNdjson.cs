@@ -419,16 +419,12 @@ namespace BehaviorDiff.Contracts
             AssemblyDiscovery discovery;
             switch (discoveryText)
             {
-                case nameof(AssemblyDiscovery.StartupEnumeration):
-                    discovery = AssemblyDiscovery.StartupEnumeration;
-                    break;
-                case nameof(AssemblyDiscovery.AssemblyLoadEvent):
-                    discovery = AssemblyDiscovery.AssemblyLoadEvent;
-                    break;
                 case nameof(AssemblyDiscovery.BuildTimeWeave):
                     discovery = AssemblyDiscovery.BuildTimeWeave;
                     break;
                 default:
+                    // StartupEnumeration and AssemblyLoadEvent were the runtime patcher's; a manifest still
+                    // carrying them predates build-time weaving and its coverage claims do not transfer.
                     error = "unrecognised " + DiscoveryField + ": '" + discoveryText + "'";
                     return false;
             }

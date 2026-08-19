@@ -58,60 +58,13 @@ namespace BehaviorDiff.Tracer
         Unresolvable,
     }
 
-    /// <summary>Decides which members get patched, and records a reason for every one that does not.</summary>
+    /// <summary>Decides which members get instrumented, and records a reason for every one that does not.</summary>
     internal static class MethodSelector
     {
-        // Only PatchInstaller consults this, so it guards the Harmony backend against detouring the detour
-        // engine. Still live: the SampleApp proofs all run Harmony. Removable when Harmony is.
-        private static readonly string[] ExcludedAssemblyPrefixes =
-        {
-            "BehaviorDiff.",
-            "0Harmony",
-            "HarmonySharedState",
-            "MonoMod",
-            "xunit",
-            "System",
-            "Microsoft",
-            "netstandard",
-            "mscorlib",
-        };
-
-        internal static bool IsCandidateAssembly(Assembly assembly, TracerOptions options)
-        {
-            if (assembly.IsDynamic)
-            {
-                return false;
-            }
-
-            string name = assembly.GetName().Name ?? string.Empty;
-            foreach (string prefix in ExcludedAssemblyPrefixes)
-            {
-                if (name.StartsWith(prefix, StringComparison.Ordinal))
-                {
-                    return false;
-                }
-            }
-
-            return options.IsEnabled;
-        }
-
         /// <summary>
         /// True when the type's namespace matches an include prefix. Types outside the include set are not
         /// enumerated at all and never reach the manifest; everything inside it does, even when skipped.
         /// </summary>
-        /// <summary>
-        /// Which backend is asking. Harmony has to skip generic definitions because its prefix and postfix
-        /// are closed methods that would have to be built per type argument, and the arguments are only
-        /// known per call. Cecil rewrites the definition's own IL and every instantiation runs that body,
-        /// so the restriction is Harmony's, not the tool's. The two backends therefore instrument
-        /// deliberately different method sets.
-        /// </summary>
-        internal enum Backend
-        {
-            Harmony,
-            Cecil,
-        }
-
         internal static bool IsInScope(Type type, TracerOptions options)
         {
             return MatchesAny(type.Namespace, options.IncludeNamespacePrefixes);
@@ -121,16 +74,11 @@ namespace BehaviorDiff.Tracer
         /// Type-level verdict for an in-scope type. A non-None result still means every member gets a
         /// manifest entry carrying this reason.
         /// </summary>
-        internal static SkipReason EvaluateType(Type type, TracerOptions options, Backend backend)
+        internal static SkipReason EvaluateType(Type type, TracerOptions options)
         {
             if (MatchesAny(type.Namespace, options.ExcludeNamespacePrefixes))
             {
                 return SkipReason.ExcludedNamespace;
-            }
-
-            if (backend == Backend.Harmony && type.IsGenericTypeDefinition)
-            {
-                return SkipReason.GenericTypeDefinition;
             }
 
             if (typeof(IAsyncStateMachine).IsAssignableFrom(type))
@@ -146,7 +94,7 @@ namespace BehaviorDiff.Tracer
             return type.FullName is null ? SkipReason.Unresolvable : SkipReason.None;
         }
 
-        internal static SkipReason Evaluate(MethodBase method, Backend backend)
+        internal static SkipReason Evaluate(MethodBase method)
         {
             Type? declaring = method.DeclaringType;
             if (declaring is null)
@@ -181,11 +129,6 @@ namespace BehaviorDiff.Tracer
             if (!isConstructor && method.IsSpecialName)
             {
                 return SkipReason.PropertyOrOperator;
-            }
-
-            if (backend == Backend.Harmony && (method.IsGenericMethodDefinition || method.ContainsGenericParameters))
-            {
-                return SkipReason.GenericDefinition;
             }
 
             if (method is MethodInfo methodInfo)

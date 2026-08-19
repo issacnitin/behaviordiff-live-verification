@@ -181,7 +181,7 @@ namespace BehaviorDiff.Weaver
             }
 
             string outputPath = assemblyPath;
-            module.Write(outputPath + ".woven", new WriterParameters { WriteSymbols = true });
+module.Write(outputPath + ".woven", new WriterParameters { WriteSymbols = File.Exists(Path.ChangeExtension(assemblyPath, ".pdb")) });
 
             int declined = plans.Count(p => p.SkipReason == AsyncDecline);
             int skipped = plans.Count(p => p.SkipReason != null && p.SkipReason != AsyncDecline);

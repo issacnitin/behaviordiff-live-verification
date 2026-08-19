@@ -419,7 +419,6 @@ namespace BehaviorDiff.Cli
 
             var environment = new Dictionary<string, string>
             {
-                ["DOTNET_JITMinOpts"] = "1",
                 ["BEHAVIORDIFF_TRACE"] = Path.Combine(directory, "run.ndjson"),
                 ["BEHAVIORDIFF_NAMESPACES"] = scope,
             };

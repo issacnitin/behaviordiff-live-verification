@@ -37,7 +37,6 @@ namespace BehaviorDiff.Tracer
         private static TracerOptions s_options = new TracerOptions();
         private static TraceBuffer? s_buffer;
         private static SourceLocationResolver? s_locations;
-        private static PatchInstaller? s_installer;
         private static long s_nextCallId;
         private static long s_internalErrors;
         private static bool s_initialized;
@@ -98,24 +97,6 @@ namespace BehaviorDiff.Tracer
                 s_locations = new SourceLocationResolver();
                 s_buffer = new TraceBuffer(tracePath, options.QueueCapacity);
 
-                // Woven assemblies carry their instrumentation and register themselves, so the patcher must
-                // not also run: two backends on one process would double every event.
-                bool weaving = string.Equals(
-                    Environment.GetEnvironmentVariable("BEHAVIORDIFF_BACKEND"),
-                    "cecil",
-                    StringComparison.OrdinalIgnoreCase);
-
-                if (!weaving)
-                {
-                    var installer = new PatchInstaller(options, s_locations, RegisterMethod)
-                    {
-                        ManifestPath = options.ResolveManifestPath(),
-                    };
-
-                    s_installer = installer;
-                    installer.InstallAll();
-                }
-
                 AppDomain.CurrentDomain.ProcessExit += (_, _) => Shutdown();
             }
         }
@@ -125,25 +106,18 @@ namespace BehaviorDiff.Tracer
         {
             TraceBuffer? buffer;
             SourceLocationResolver? locations;
-            PatchInstaller? installer;
             TracerOptions options;
 
             lock (s_gate)
             {
                 buffer = s_buffer;
                 locations = s_locations;
-                installer = s_installer;
                 options = s_options;
                 s_buffer = null;
                 s_locations = null;
-                s_installer = null;
             }
 
-            // Manifest first: it has to describe everything discovered, including assemblies that only
-            // turned up during the run.
-            installer?.Shutdown();
-
-            // Same slot for the weaving backend, which has no installer. No-ops unless something was woven.
+            // Manifest first: it has to describe every member the weaver registered.
             WeaveHooks.WriteManifest(options.ResolveManifestPath());
 
             buffer?.Dispose();

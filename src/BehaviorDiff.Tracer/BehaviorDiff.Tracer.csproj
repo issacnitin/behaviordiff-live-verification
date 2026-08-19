@@ -17,7 +17,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Lib.Harmony" Version="2.3.3" />
     <!-- Portable PDB sequence points. In-box from net5.0 on, but netstandard2.0 needs the package. -->
     <PackageReference Include="System.Reflection.Metadata" Version="8.0.0" />
     <!-- ValueTask / ValueTask<T> are absent from the netstandard2.0 reference assemblies. -->

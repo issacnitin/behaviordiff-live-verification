@@ -16,8 +16,25 @@ $env:DOTNET_JITMinOpts = '1'
 $env:BEHAVIORDIFF_TRACE = Join-Path $work 'run.ndjson'
 $env:BEHAVIORDIFF_NAMESPACES = 'SampleApp.NoPdb'
 $env:BEHAVIORDIFF_EXCLUDE_NAMESPACES = ''
+$env:BEHAVIORDIFF_BACKEND = 'cecil'
 
-dotnet test samples/SampleApp.NoPdb.Tests/SampleApp.NoPdb.Tests.csproj -c Release --no-build --nologo | Out-Null
+# The gate is about an assembly with no PDB, so it has to be woven like any other subject.
+$staged = Join-Path $work 'bin'
+New-Item -ItemType Directory -Path $staged -Force | Out-Null
+Copy-Item 'samples/SampleApp.NoPdb.Tests/bin/Release/net8.0/*' $staged -Recurse -Force
+
+foreach ($pair in @(@('SampleApp.NoPdb', $false), @('SampleApp.NoPdb.Tests', $true))) {
+    $dll = Join-Path $staged "$($pair[0]).dll"
+    if (-not (Test-Path $dll)) { continue }
+
+    $weaveArgs = @('--assembly', $dll, '--include', 'SampleApp.NoPdb')
+    if ($pair[1]) { $weaveArgs += '--test-assembly' }
+    dotnet run --project tools/Weaver/Weaver.csproj -c Release -v quiet --no-build -- @weaveArgs | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "weave failed: $($pair[0])" }
+    Move-Item "$dll.woven" $dll -Force
+}
+
+dotnet test (Join-Path $staged 'SampleApp.NoPdb.Tests.dll') --nologo | Out-Null
 
 $manifestFile = Get-ChildItem $work -Filter 'run.*.manifest.ndjson' | Select-Object -First 1
 if (-not $manifestFile) { throw 'no manifest produced' }

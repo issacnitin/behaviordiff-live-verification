@@ -1,14 +1,11 @@
 namespace BehaviorDiff.Contracts
 {
-    /// <summary>How the tracer first saw an assembly.</summary>
+    /// <summary>
+    /// How the tracer first saw an assembly. Single-valued since the runtime patcher was removed; kept as an
+    /// enum so the wire format stays self-describing and TryParseLine can reject the retired values.
+    /// </summary>
     public enum AssemblyDiscovery
     {
-        /// <summary>Present in the snapshot taken when the tracer installed itself.</summary>
-        StartupEnumeration,
-
-        /// <summary>Arrived on the AssemblyLoad event, either as a side effect of patching or later.</summary>
-        AssemblyLoadEvent,
-
         /// <summary>
         /// Instrumented at build time by the weaver. No patcher ran, so there is no discovery moment and no
         /// window between load and instrumentation: every call in the process was observable.

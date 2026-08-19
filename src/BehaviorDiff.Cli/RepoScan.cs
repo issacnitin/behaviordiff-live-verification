@@ -142,7 +142,6 @@ namespace BehaviorDiff.Cli
     {
         private static readonly string[] RuntimeFiles =
         {
-            "0Harmony.dll",
             "MonoMod.Core.dll",
             "MonoMod.Utils.dll",
             "MonoMod.Backports.dll",
