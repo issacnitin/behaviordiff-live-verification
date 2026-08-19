@@ -129,6 +129,10 @@ namespace BehaviorDiff.Tracer
             // Manifest first: it has to describe everything discovered, including assemblies that only
             // turned up during the run.
             installer?.Shutdown();
+
+            // Same slot for the weaving backend, which has no installer. No-ops unless something was woven.
+            WeaveHooks.WriteManifest(options.ResolveManifestPath());
+
             buffer?.Dispose();
             locations?.Dispose();
 

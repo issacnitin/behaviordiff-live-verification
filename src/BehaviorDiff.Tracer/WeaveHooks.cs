@@ -22,6 +22,11 @@ namespace BehaviorDiff.Tracer
 
         private static AssemblyCoverage?[] s_assemblies = new AssemblyCoverage?[0];
 
+        // Every member the weaver considered, woven or skipped, so discovered == Woven + Skipped reconciles
+        // the same way the Harmony manifest does. A weave failure is a build error, never a manifest row.
+        private static readonly System.Collections.Generic.List<ManifestEntry> s_members =
+            new System.Collections.Generic.List<ManifestEntry>();
+
         // A woven exit that cannot recover its frame emits nothing, and a missing event is indistinguishable
         // from a behaviour change downstream. Counted rather than thrown: faulting inside instrumentation
         // would corrupt the process under test. The harness asserts this is zero.
@@ -62,6 +67,7 @@ namespace BehaviorDiff.Tracer
             int line,
             string sourceResolution,
             int returnKind,
+            bool isTestRoot,
             string parameterNames)
         {
             if (index < 0)
@@ -106,7 +112,99 @@ namespace BehaviorDiff.Tracer
 
                 coverage.NotePatchedMember();
                 coverage.NoteMemberSource(sourceResolution);
+
+                s_members.Add(new ManifestEntry
+                {
+                    Assembly = coverage.Name,
+                    MethodFullName = fullName,
+                    Status = PatchStatus.Patched,
+                    ReturnKind = ((ReturnKind)returnKind).ToString(),
+                    IsTestRoot = isTestRoot,
+                    SourceResolution = sourceResolution,
+                });
             }
+        }
+
+        /// <summary>
+        /// Declares a member the weaver considered and did not instrument. Emitted so the manifest accounts
+        /// for every discovered member, which is what makes the frontier rule sound.
+        /// </summary>
+        public static void RegisterSkipped(
+            int assemblyIndex,
+            string fullName,
+            string skipReason,
+            string returnKind,
+            bool isTestRoot,
+            string sourceResolution)
+        {
+            lock (s_gate)
+            {
+                if (assemblyIndex < 0 || assemblyIndex >= s_assemblies.Length)
+                {
+                    throw new ArgumentOutOfRangeException(nameof(assemblyIndex));
+                }
+
+                AssemblyCoverage coverage = s_assemblies[assemblyIndex]!;
+                s_members.Add(new ManifestEntry
+                {
+                    Assembly = coverage.Name,
+                    MethodFullName = fullName,
+                    Status = PatchStatus.Skipped,
+                    SkipReason = skipReason,
+                    ReturnKind = returnKind,
+                    IsTestRoot = isTestRoot,
+                    SourceResolution = sourceResolution,
+                });
+            }
+        }
+
+        /// <summary>Closes every woven assembly's coverage and writes the manifest. Called before writer stats.</summary>
+        internal static void WriteManifest(string path)
+        {
+            if (string.IsNullOrEmpty(path) || s_assemblies.Length == 0)
+            {
+                return;
+            }
+
+            CoverageManifest manifest;
+            lock (s_gate)
+            {
+                var assemblies = new System.Collections.Generic.List<AssemblyManifestEntry>(s_assemblies.Length);
+                foreach (AssemblyCoverage? coverage in s_assemblies)
+                {
+                    if (coverage == null)
+                    {
+                        continue;
+                    }
+
+                    // Instrumentation ships inside the IL, so coverage is complete from the first instruction.
+                    coverage.MarkComplete(patchedAtMs: 0, afterStartup: false, scanned: true);
+                    assemblies.Add(coverage.ToManifestEntry());
+                }
+
+                var unruled = new System.Collections.Generic.List<UnruledEnumerableEntry>();
+                foreach (System.Collections.Generic.KeyValuePair<string, long> entry in DigestStatistics.UnruledEnumerables())
+                {
+                    unruled.Add(new UnruledEnumerableEntry { TypeName = entry.Key, Count = entry.Value });
+                }
+
+                manifest = new CoverageManifest
+                {
+                    Assemblies = assemblies,
+                    Members = new System.Collections.Generic.List<ManifestEntry>(s_members),
+                    UnruledEnumerables = unruled,
+                    DigestStats = new DigestStatsEntry
+                    {
+                        ValuesDigested = DigestStatistics.ValuesDigested,
+                        DepthLimited = DigestStatistics.DepthLimited,
+                        Blocklisted = DigestStatistics.Blocklisted,
+                        Errored = DigestStatistics.Errored,
+                        RenderedTruncated = DigestStatistics.RenderedTruncated,
+                    },
+                };
+            }
+
+            ManifestFile.Write(path, manifest);
         }
 
         /// <summary>Method prologue. The returned frame must be stored in a local that survives into the handler.</summary>
