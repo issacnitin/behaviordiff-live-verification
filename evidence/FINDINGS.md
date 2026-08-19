@@ -216,3 +216,34 @@ member thread; re-push updates both; refusal updates the summary with its exact 
 0 and fail-on-findings exits 1. It cannot prove Azure Repos authorization or whether the service will
 track a line comment in an UNEXPECTED file, because that file is absent from the PR diff and therefore
 has no iteration `changeTrackingId` to supply.
+
+---
+
+## 7. Live GitHub verification
+
+Public fixture: <https://github.com/issacnitin/behaviordiff-live-verification/pull/1>
+
+The PR changed one line in `SettingsParser.cs` (`50m` to `30m`). Two final hosted runs completed
+successfully and produced equivalent analyzed artifacts:
+
+| Run | Job duration | BehaviorDiff wall | Peak RSS | Trace bytes |
+| --- | ---: | ---: | ---: | ---: |
+| [32266828793](https://github.com/issacnitin/behaviordiff-live-verification/actions/runs/32266828793) | 57 s | 33.10 s | 215,532 KB | 24,546,252 |
+| [32266826312](https://github.com/issacnitin/behaviordiff-live-verification/actions/runs/32266826312) | 61 s | 30.63 s | 217,276 KB | 24,557,295 |
+
+The final `findings.json` was 2,055 bytes and reported:
+
+```text
+status      : analyzed
+verdict     : findings
+UNEXPECTED  : 1 member, 2 call sites
+member      : SampleApp.ShippingCalculator.IsFreeShipping(System.Decimal)
+source      : samples/SampleApp/ShippingCalculator.cs:10
+observed    : Primitive:false -> Primitive:true (two tests)
+```
+
+GitHub updated one issue comment idempotently. The Markdown table and headings rendered correctly.
+There was one ugly but intentional detail: the line-comment limitation bullet contains GitHub's raw
+422 JSON response. GitHub review comments can only target files in the unified PR diff, while this
+finding is unexpected precisely because `ShippingCalculator.cs` was not edited. No review comment was
+created; the summary includes the resolved source line and the exact rejection instead.
