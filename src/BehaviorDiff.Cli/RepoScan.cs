@@ -226,6 +226,9 @@ namespace BehaviorDiff.Cli
                 <!-- Only the one TFM being traced. A multi-targeted project still builds its other TFMs
                      untouched, and the adapter is compiled for this TFM only. -->
                 <BehaviorDiffInject Condition="'$(BehaviorDiffIsTarget)' == 'true' And '$(TargetFramework)' == '$(BehaviorDiffTraceTfm)'">true</BehaviorDiffInject>
+                 <!-- Strong-named .NET 5+ test assemblies can load the unsigned injection kit, but the
+                     compiler reports CS8002 and repositories with warnings-as-errors reject the build. -->
+                 <NoWarn Condition="'$(BehaviorDiffInject)' == 'true'">$(NoWarn);CS8002</NoWarn>
               </PropertyGroup>
 
               <ItemGroup Condition="'$(BehaviorDiffInject)' == 'true'">

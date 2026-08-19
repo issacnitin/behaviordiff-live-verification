@@ -42,7 +42,7 @@ four independent guards plus a tripwire.
 
 **Result**, sync and async paths, Harmony+MinOpts against Cecil+MinOpts:
 
-```
+```text
 events                     7,642 = 7,642
 methods                      111 =   111
 (a) matched keys                    242
@@ -99,7 +99,7 @@ no test file — so every test key matches on both sides.
 
 **Scale.**
 
-```
+```text
 instrumented    : 638 members in the library, 1,054 in the test assembly
 events per run  : 105,743
 traces          : 555 MB across four runs
@@ -108,7 +108,7 @@ matched keys    : 45,519
 
 **Findings.**
 
-```
+```text
 EXPECTED (edited file)   : 11 member(s), across 2962 call site(s)
 UNEXPECTED (headline)    : 11 member(s), across  147 call site(s)
 source-generated members : 4
@@ -117,7 +117,7 @@ source-generated members : 4
 The 11 EXPECTED members are the sync-over-async removal itself, seen as members appearing and
 disappearing:
 
-```
+```text
 Patched -> absent  AbstractValidator`1.ValidateInternalAsync(ctx, bool, CancellationToken)
 absent -> Patched  AbstractValidator`1.ValidateInternalAsync(ctx, CancellationToken)
 Patched -> absent  PropertyRule`2.ValidateAsync(ctx, bool, CancellationToken)
@@ -139,7 +139,7 @@ The tool reports them explicitly rather than omitting them.
 
 ## 5. Cost and stability of the pipeline
 
-```
+```text
 four test runs   30.7 s
 engine diff      10.8 s      peak working set 1.33 GB against 416 MB of traces
 engine frontier   2.7 s      peak working set 0.41 GB
@@ -165,3 +165,54 @@ events total, all of it in two methods — both overloads of `AccessorCache`1+Ke
 `ConcurrentDictionary` during lookup. The method *set* was byte-identical across all four runs, which
 is what rules out the instrumentation as the cause: if generic instantiation were driving it, which
 methods emitted would vary, not just how often.
+
+---
+
+## 6. Azure Pipelines fit
+
+Microsoft's current hosted-agent specification (checked 2026-08-19) is 2 CPU cores, 7 GB VM RAM,
+with Linux jobs limited to 6 GB physical memory, and 10 GB of storage available for source and build
+outputs. Sources:
+
+- <https://learn.microsoft.com/azure/devops/pipelines/agents/hosted#hardware>
+- <https://learn.microsoft.com/azure/devops/pipelines/agents/hosted#capabilities-and-limitations>
+
+FluentValidation's measured local footprint compared with those limits:
+
+| Resource | BehaviorDiff | Hosted limit | Share |
+| --- | ---: | ---: | ---: |
+| trace files | 555,099,175 bytes | 10 GB usable disk | 5.6% |
+| complete BehaviorDiff work dir | 651,692,990 bytes | 10 GB usable disk | 6.5% |
+| diff peak working set | 1.33 GB | 6 GB Linux physical-memory cgroup | 22% |
+| wall clock | 51.9 s local | 60 min free private-project job | 1.4% of job duration |
+
+The 651.7 MB work directory includes four trace directories (three base, one PR), staged binaries,
+the divergence set, and the frontier report. The pipeline keeps `findings.json` as a small artifact
+and removes the work directory under `condition: always()`, so self-hosted agents do not accumulate
+trace data between pipeline invocations. Microsoft-hosted agents are fresh per job, but cleanup still
+prevents later steps in the same job from competing with 555 MB of traces.
+
+**Decision: keep four total test runs (three base + one PR) initially.** Disk and memory have ample
+headroom, and the third base run is the one that reduced residual divergences from 520/761 to 57/54.
+Dropping to three total runs would save one suite invocation at the cost of substantially weaker noise
+characterisation. Revisit only after the hosted measurement says time is the bottleneck.
+
+The generic CLI path was exercised against the external FluentValidation worktree at `ef50516d`,
+using `HEAD` for both sides. It wove 3 project assemblies per side and produced all four non-empty
+traces: 138,991,695; 138,926,750; 138,890,682; and 138,900,889 bytes. The frontier then refused
+because 108 residual nodes survived while the same-commit changed-file set was empty. Its canonical
+result was `status=refused`, `isCleanResult=false`, with no `members` array. That is the expected
+behavior: the run proves orchestration and capacity, not that one sample can justify a clean verdict.
+
+**Hosted wall clock is not yet measured.** This checkout has Azure DevOps access but no BehaviorDiff
+PR or pipeline context; its inherited remote points at an unrelated repository, so pushing the tool
+there merely to obtain a timing would contaminate another project. `azure-pipelines.yml` prints one
+`HOSTED MEASUREMENT` line with wall time, parent-process peak working set, trace bytes, and analysis
+exit code on the first valid PR run, alongside the 51.9 s local reference.
+
+**Live REST posting is also unverified.** `tools/verify-ado-post.ps1` proves the documented API 7.1
+routes and payloads against a local HTTP service: first run creates one summary plus one line-anchored
+member thread; re-push updates both; refusal updates the summary with its exact reason; warn-only exits
+0 and fail-on-findings exits 1. It cannot prove Azure Repos authorization or whether the service will
+track a line comment in an UNEXPECTED file, because that file is absent from the PR diff and therefore
+has no iteration `changeTrackingId` to supply.

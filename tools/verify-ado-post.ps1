@@ -13,13 +13,14 @@ $cli = Join-Path $repo 'src/BehaviorDiff.Cli/BehaviorDiff.Cli.csproj'
 $findings = Join-Path ([System.IO.Path]::GetTempPath()) 'behaviordiff-diff/findings.json'
 $recording = Join-Path ([System.IO.Path]::GetTempPath()) 'behaviordiff-ado-mock.ndjson'
 $refusal = Join-Path ([System.IO.Path]::GetTempPath()) 'behaviordiff-ado-refusal.json'
+$ready = Join-Path ([System.IO.Path]::GetTempPath()) 'behaviordiff-ado-mock.ready'
 $port = 18741
 
 if (-not (Test-Path $findings)) {
     throw "missing real SampleApp findings at $findings - run: pwsh tools/verify-diff.ps1 -Mutate -Change config"
 }
 
-Remove-Item $recording, $refusal -Force -ErrorAction SilentlyContinue
+Remove-Item $recording, $refusal, $ready -Force -ErrorAction SilentlyContinue
 @{
     schema = 'behaviordiff.findings/1'; status = 'refused'; verdict = 'could_not_analyze'
     isCleanResult = $false; exitCode = 3; exitReason = 'analysis_refused'
@@ -27,11 +28,12 @@ Remove-Item $recording, $refusal -Force -ErrorAction SilentlyContinue
     refusal = @{ reason = 'CALL TREE: parent links were incomplete; no safety verdict was produced.' }
 } | ConvertTo-Json -Depth 5 | Set-Content $refusal
 
-$server = Start-Job -ArgumentList $port, $recording -ScriptBlock {
-    param($port, $recording)
+$server = Start-Job -ArgumentList $port, $recording, $ready -ScriptBlock {
+    param($port, $recording, $ready)
     $ErrorActionPreference = 'Stop'
     $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, $port)
     $listener.Start()
+    Set-Content $ready 'ready'
     $threads = @()
     $nextThread = 100
 
@@ -109,6 +111,11 @@ $server = Start-Job -ArgumentList $port, $recording -ScriptBlock {
 }
 
 try {
+    $readyDeadline = [DateTime]::UtcNow.AddSeconds(10)
+    while (-not (Test-Path $ready)) {
+        if ([DateTime]::UtcNow -gt $readyDeadline) { throw 'local ADO mock did not become ready' }
+    }
+
     dotnet build $cli -c Release --nologo -v quiet | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'CLI build failed' }
 
@@ -134,17 +141,21 @@ try {
     dotnet run --project $cli -c Release --no-build -- post --provider=azuredevops --findings $findings --gate fail-on-findings
     if ($LASTEXITCODE -ne 1) { throw "fail-on-findings expected 1, got $LASTEXITCODE" }
 
+    Write-Host '=== script-only fallback updates the same summary ===' -ForegroundColor Cyan
+    & (Join-Path $PSScriptRoot 'Post-AdoFallback.ps1') -Findings $refusal
+    if ($LASTEXITCODE -ne 0) { throw "fallback poster returned $LASTEXITCODE" }
+
     $deadline = [DateTime]::UtcNow.AddSeconds(5)
     do {
         $requests = if (Test-Path $recording) { @(Get-Content $recording | ConvertFrom-Json) } else { @() }
-    } while ($requests.Count -lt 11 -and [DateTime]::UtcNow -lt $deadline)
+    } while ($requests.Count -lt 13 -and [DateTime]::UtcNow -lt $deadline)
 
     $posts = @($requests | Where-Object method -eq 'POST')
     $patches = @($requests | Where-Object method -eq 'PATCH')
     $gets = @($requests | Where-Object method -eq 'GET')
     if ($posts.Count -ne 2) { throw "idempotency failed: expected exactly 2 creates total, got $($posts.Count)" }
-    if ($patches.Count -ne 5) { throw "expected 5 updates across re-push/refusal/gate, got $($patches.Count)" }
-    if ($gets.Count -ne 4) { throw "expected one list call per invocation, got $($gets.Count)" }
+    if ($patches.Count -ne 6) { throw "expected 6 updates across re-push/refusal/gate/fallback, got $($patches.Count)" }
+    if ($gets.Count -ne 5) { throw "expected one list call per invocation, got $($gets.Count)" }
 
     $summary = $posts | Where-Object { $_.body -match 'behaviordiff:pr:314:summary' } | Select-Object -First 1
     $member = $posts | Where-Object { $_.body -match 'behaviordiff:pr:314:member:' } | Select-Object -First 1
@@ -162,6 +173,7 @@ try {
     Write-Host 'PASS: re-push PATCHed existing comments; total POST count stayed at 2' -ForegroundColor Green
     Write-Host 'PASS: refusal PATCHed the summary with the reason; never posted silence' -ForegroundColor Green
     Write-Host 'PASS: warn-only returned 0; fail-on-findings returned 1' -ForegroundColor Green
+    Write-Host 'PASS: script-only fallback PATCHed the existing summary; no duplicate POST' -ForegroundColor Green
 }
 finally {
     Stop-Job $server -ErrorAction SilentlyContinue

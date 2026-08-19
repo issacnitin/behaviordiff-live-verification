@@ -33,7 +33,7 @@ with six diverging keys collapsing to two findings.
 pwsh -File tools/verify-diff.ps1 -Mutate -Change config
 ```
 
-```
+```text
 collapse                 : 6 diverged keys -> 2 frontier node(s)  (3.0x)
 EXPECTED (edited file)   : 0 member(s), across 0 call site(s)
 UNEXPECTED (headline)    : 1 member(s), across 2 call site(s)
@@ -48,7 +48,7 @@ nobody here wrote.
 pwsh -File tools/fluentvalidation-pipeline.ps1
 ```
 
-```
+```text
 EXPECTED (edited file)   : 11 member(s), across 2962 call site(s)
 UNEXPECTED (headline)    : 11 member(s), across  147 call site(s)
 source-generated members : 4
@@ -82,6 +82,25 @@ Exit codes: `0` clean, `1` findings, `3` run invalid (refused), `4`/`5` build fa
 The engine **refuses** rather than reporting a clean result it cannot justify — for example when no
 changed file contributed a single traced member, or when path normalization failed. A refusal is exit
 3 and names the reason.
+
+## Pull request pipeline
+
+`azure-pipelines.yml` runs the same CLI used locally; there is no build-task extension. It resolves
+Azure DevOps PR refs with `--ci=azuredevops`, writes `findings.json`, posts the result, publishes that
+artifact, and deletes the large trace work directory after every job.
+
+Azure Repos PR validation is configured through a **Build validation branch policy**, not a YAML
+`pr` trigger. Attach this pipeline to each target branch that should be checked; that policy is the PR
+trigger. The YAML uses `trigger: none` so source-branch pushes do not duplicate the merge-commit run.
+
+```text
+behaviordiff <repo> --ci=azuredevops --findings findings.json
+behaviordiff post --provider=azuredevops --findings findings.json
+```
+
+The posting gate defaults to `warn-only`. Set the pipeline variable `behaviorDiffGate` to
+`fail-on-findings` only after the signal is trusted. A refusal posts a prominent non-verdict and stays
+nonblocking; it is never converted into an empty finding list.
 
 ## Limitations
 
@@ -140,4 +159,8 @@ pwsh -File tools/verify-correlation.ps1      # test attribution matches the fram
 pwsh -File tools/verify-negative-tests.ps1   # a no-PDB assembly invalidates the run
 pwsh -File tools/verify-null-task.ps1        # the null-Task path emits exactly once
 pwsh -File tools/verify-diff.ps1 -Mutate -Change config
+pwsh -File tools/verify-ci-refs.ps1          # merge-base refs and invalid findings arms
+pwsh -File tools/verify-mcp.ps1              # MCP reads canonical findings.json
+pwsh -File tools/verify-ado-post.ps1         # local ADO REST contract and idempotency
+pwsh -File tools/verify-pipeline.ps1         # mocked end-to-end CI seams
 ```

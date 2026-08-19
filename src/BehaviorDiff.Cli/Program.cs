@@ -22,6 +22,11 @@ namespace BehaviorDiff.Cli
                     Console.Error.WriteLine("POST FAILED: " + ex.Message);
                     return ExitCodes.BuildOrTestFailure;
                 }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine("POST FAILED: " + ex.GetType().Name + ": " + ex.Message);
+                    return ExitCodes.BuildOrTestFailure;
+                }
             }
 
             string? baseRef = null;
@@ -99,6 +104,22 @@ namespace BehaviorDiff.Cli
                     refs?.PrSha,
                     refs?.MergeBaseSha);
                 return ex.ExitCode;
+            }
+            catch (Exception ex)
+            {
+                string reason = ex.GetType().Name + ": " + ex.Message;
+                Console.Error.WriteLine();
+                Console.Error.WriteLine("FAILED: " + reason);
+                ResolvedRefs? refs = pipeline?.ResolvedRefs;
+                FindingsCommand.WriteInvalid(
+                    findingsPath,
+                    "failed",
+                    ExitCodes.BuildOrTestFailure,
+                    reason,
+                    refs?.BaseSha,
+                    refs?.PrSha,
+                    refs?.MergeBaseSha);
+                return ExitCodes.BuildOrTestFailure;
             }
         }
 
@@ -226,6 +247,11 @@ namespace BehaviorDiff.Cli
                 BuildInstrumented("pr", prTree, kit, prProjects);
 
                 Console.WriteLine();
+                Console.WriteLine("=== 6b. weave project assemblies ===");
+                WeaveOutputs("base", baseProjects, scan.NamespacePrefixes);
+                WeaveOutputs("pr", prProjects, scan.NamespacePrefixes);
+
+                Console.WriteLine();
                 Console.WriteLine("=== 7. test runs ===");
                 string scope = string.Join(";", scan.NamespacePrefixes);
                 Console.WriteLine("  tracer namespace scope: " + (scope.Length == 0 ? "<empty>" : scope));
@@ -236,6 +262,7 @@ namespace BehaviorDiff.Cli
 
                 string base1 = RunTests("base_run1", baseTree, baseProjects, scope);
                 string base2 = RunTests("base_run2", baseTree, baseProjects, scope);
+                string base3 = RunTests("base_run3", baseTree, baseProjects, scope);
                 string pr = RunTests("pr_run", prTree, prProjects, scope);
 
                 AssertTestIdsPresent(base1);
@@ -251,6 +278,7 @@ namespace BehaviorDiff.Cli
                 {
                     Base1 = base1,
                     Base2 = base2,
+                    Base3 = base3,
                     Pr = pr,
                     BaseRoot = baseTree,
                     PrRoot = prTree,
@@ -503,6 +531,93 @@ namespace BehaviorDiff.Cli
             }
 
             Console.WriteLine("  " + label + " built with instrumentation");
+        }
+
+        private static void WeaveOutputs(
+            string label,
+            IReadOnlyList<ResolvedTestProject> projects,
+            IEnumerable<string> namespacePrefixes)
+        {
+            string weaver = Path.Combine(AppContext.BaseDirectory, "behaviordiff-weaver.dll");
+            if (!File.Exists(weaver))
+            {
+                throw new CliException("Cecil weaver missing from CLI output: " + weaver);
+            }
+
+            string include = string.Join(",", namespacePrefixes);
+            int wovenAssemblies = 0;
+            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (ResolvedTestProject project in projects)
+            {
+                string output = Path.Combine(
+                    Path.GetDirectoryName(project.Path)!,
+                    "bin",
+                    "Release",
+                    project.TraceTfm);
+                if (!Directory.Exists(output))
+                {
+                    throw new CliException("Instrumented build produced no output directory: " + output);
+                }
+
+                string testAssembly = Path.GetFileNameWithoutExtension(project.Path) + ".dll";
+                foreach (string assembly in Directory.GetFiles(output, "*.dll", SearchOption.TopDirectoryOnly)
+                    .Where(path => File.Exists(Path.ChangeExtension(path, ".pdb")))
+                    .Where(path => !Path.GetFileName(path).StartsWith("BehaviorDiff.", StringComparison.Ordinal))
+                    .OrderBy(path => path, StringComparer.Ordinal))
+                {
+                    if (!visited.Add(Path.GetFullPath(assembly)))
+                    {
+                        continue;
+                    }
+
+                    var arguments = new List<string>
+                    {
+                        weaver,
+                        "--assembly",
+                        assembly,
+                        "--include",
+                        include,
+                    };
+                    if (string.Equals(Path.GetFileName(assembly), testAssembly, StringComparison.OrdinalIgnoreCase))
+                    {
+                        arguments.Add("--test-assembly");
+                    }
+
+                    ProcessResult result = Shell.Run("dotnet", arguments, output);
+                    if (!result.Ok)
+                    {
+                        throw new CliException(
+                            "Cecil weaving failed for " + assembly + "." + Environment.NewLine
+                            + Shell.Tail(result.Output, 20));
+                    }
+
+                    string woven = assembly + ".woven";
+                    if (!File.Exists(woven))
+                    {
+                        throw new CliException("Weaver reported success but produced no output for " + assembly + ".");
+                    }
+
+                    if (result.Output.Contains("discovered : 0", StringComparison.Ordinal))
+                    {
+                        File.Delete(woven);
+                        continue;
+                    }
+
+                    File.Move(woven, assembly, overwrite: true);
+                    wovenAssemblies++;
+                }
+            }
+
+            if (wovenAssemblies == 0)
+            {
+                throw new CliException(
+                    "Cecil found no in-scope project assembly in the " + label + " test outputs. "
+                    + "Refusing before a zero-event run.",
+                    ExitCodes.RunInvalid);
+            }
+
+            Console.WriteLine("  " + label + " woven project assemblies: " + wovenAssemblies);
         }
 
         private string RunTests(string label, string tree, List<ResolvedTestProject> projects, string scope)
