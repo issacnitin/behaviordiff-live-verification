@@ -23,22 +23,17 @@ $repo = Split-Path -Parent $PSScriptRoot
 $prTree = Join-Path (Split-Path -Parent $repo) 'BehaviorDiff-prtree'
 $work = Join-Path ([System.IO.Path]::GetTempPath()) 'behaviordiff-diff'
 
-function Invoke-Suite([string]$treeRoot, [string]$outputDir) {
+function Invoke-Suite([string]$stagedBin, [string]$outputDir) {
     Remove-Item $outputDir -Recurse -Force -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Path $outputDir | Out-Null
 
     $env:DOTNET_JITMinOpts = '1'
     $env:BEHAVIORDIFF_NAMESPACES = 'SampleApp'
     $env:BEHAVIORDIFF_EXCLUDE_NAMESPACES = 'SampleApp.Diagnostics'
+    $env:BEHAVIORDIFF_BACKEND = 'cecil'
     $env:BEHAVIORDIFF_TRACE = Join-Path $outputDir 'run.ndjson'
 
-    Push-Location $treeRoot
-    try {
-        dotnet test samples/SampleApp.Tests/SampleApp.Tests.csproj -c Release --no-build --nologo | Out-Null
-    }
-    finally {
-        Pop-Location
-    }
+    dotnet test (Join-Path $stagedBin 'SampleApp.Tests.dll') --nologo | Out-Null
 }
 
 Write-Host '=== preparing worktrees ===' -ForegroundColor Cyan
@@ -97,11 +92,17 @@ Write-Host "  pr   worktree : $prTree"
 
 Write-Host ''
 Write-Host '=== running suites ===' -ForegroundColor Cyan
-Invoke-Suite $repo (Join-Path $work 'base_run1')
+$stage = Join-Path $PSScriptRoot 'Stage-WovenSample.ps1'
+$baseBin = Join-Path $work 'base-bin'
+$prBin = Join-Path $work 'pr-bin'
+& $stage -TreeRoot $repo -OutDir $baseBin
+& $stage -TreeRoot $prTree -OutDir $prBin
+
+Invoke-Suite $baseBin (Join-Path $work 'base_run1')
 Write-Host '  base_run1 done'
-Invoke-Suite $repo (Join-Path $work 'base_run2')
+Invoke-Suite $baseBin (Join-Path $work 'base_run2')
 Write-Host '  base_run2 done'
-Invoke-Suite $prTree (Join-Path $work 'pr_run')
+Invoke-Suite $prBin (Join-Path $work 'pr_run')
 Write-Host '  pr_run done'
 
 Write-Host ''

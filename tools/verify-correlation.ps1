@@ -11,6 +11,10 @@ Set-Location (Split-Path $PSScriptRoot -Parent)
 $env:DOTNET_JITMinOpts = '1'
 $env:BEHAVIORDIFF_NAMESPACES = 'SampleApp'
 $env:BEHAVIORDIFF_EXCLUDE_NAMESPACES = 'SampleApp.Diagnostics'
+$env:BEHAVIORDIFF_BACKEND = 'cecil'
+
+$staged = Join-Path ([System.IO.Path]::GetTempPath()) 'behaviordiff-corr-bin'
+& (Join-Path $PSScriptRoot 'Stage-WovenSample.ps1') -TreeRoot (Split-Path -Parent $PSScriptRoot) -OutDir $staged
 
 function Get-Run {
     param([string]$Name, [string]$Correlation)
@@ -18,7 +22,7 @@ function Get-Run {
     Remove-Item "$env:TEMP\corr-$Name.*" -Force -ErrorAction SilentlyContinue
     $env:BEHAVIORDIFF_CORRELATION = $Correlation
     $env:BEHAVIORDIFF_TRACE = "$env:TEMP\corr-$Name"
-    dotnet test samples/SampleApp.Tests/SampleApp.Tests.csproj -c Release --no-build --nologo 2>&1 |
+    dotnet test (Join-Path $staged 'SampleApp.Tests.dll') --nologo 2>&1 |
         Select-String 'Passed!|Failed!' | ForEach-Object { Write-Host "  $Name : $($_.Line.Trim())" }
 
     $file = Get-ChildItem $env:TEMP -Filter "corr-$Name.*" |

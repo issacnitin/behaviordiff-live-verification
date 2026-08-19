@@ -17,6 +17,10 @@ Set-Location $repo
 $env:DOTNET_JITMinOpts = '1'
 $env:BEHAVIORDIFF_NAMESPACES = 'SampleApp'
 $env:BEHAVIORDIFF_EXCLUDE_NAMESPACES = 'SampleApp.Diagnostics'
+$env:BEHAVIORDIFF_BACKEND = 'cecil'
+
+$staged = Join-Path ([System.IO.Path]::GetTempPath()) 'behaviordiff-order-bin'
+& (Join-Path $PSScriptRoot 'Stage-WovenSample.ps1') -TreeRoot (Split-Path -Parent $PSScriptRoot) -OutDir $staged
 
 $runs = @()
 foreach ($i in 1, 2) {
@@ -25,7 +29,7 @@ foreach ($i in 1, 2) {
     New-Item -ItemType Directory -Path $dir | Out-Null
     $env:BEHAVIORDIFF_TRACE = Join-Path $dir 'run.ndjson'
 
-    dotnet test samples/SampleApp.Tests/SampleApp.Tests.csproj -c Release --no-build --nologo | Out-Null
+    dotnet test (Join-Path $staged 'SampleApp.Tests.dll') --nologo | Out-Null
 
     $file = Get-ChildItem $dir -Filter 'run.*.ndjson' | Where-Object { $_.Name -notlike '*manifest*' } | Select-Object -First 1
 
