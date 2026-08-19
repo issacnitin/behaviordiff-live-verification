@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       BEHAVIORDIFF_WORK: ${{ github.workspace }}/../behaviordiff-work
-      BEHAVIORDIFF_FINDINGS: ${{ github.workspace }}/../behaviordiff-artifact/findings.json
+      BEHAVIORDIFF_FINDINGS: ${{ github.workspace }}/.behaviordiff/artifacts/findings.json
       BEHAVIORDIFF_GATE: warn-only
 
     steps:

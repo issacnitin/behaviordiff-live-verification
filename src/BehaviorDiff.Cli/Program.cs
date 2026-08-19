@@ -625,6 +625,7 @@ namespace BehaviorDiff.Cli
         {
             string directory = Path.Combine(_work, label);
             Directory.CreateDirectory(directory);
+            var testOutput = new List<string>();
 
             var environment = new Dictionary<string, string>
             {
@@ -639,6 +640,7 @@ namespace BehaviorDiff.Cli
                     new[] { "test", project.Path, "-c", "Release", "-f", project.TraceTfm, "--no-build", "--nologo" },
                     tree,
                     environment);
+                testOutput.Add(project.Name + ":" + Environment.NewLine + result.Output);
 
                 // A failing assertion is an observation, not a pipeline failure: the PR may have changed
                 // behavior a test asserts on. Only a host that never started is fatal.
@@ -674,7 +676,9 @@ namespace BehaviorDiff.Cli
                     "NO EVENTS: " + label + " produced " + traces.Count + " trace file(s) totalling " + bytes
                     + " bytes. The tracer initialized but recorded nothing, so either no test executed or "
                     + "no member was instrumented. This is not a question of test identity - see the tracer "
-                    + "log and the coverage manifest in " + directory + ".",
+                    + "log and the coverage manifest in " + directory + "." + Environment.NewLine
+                    + "    Test host output:" + Environment.NewLine
+                    + Shell.Tail(string.Join(Environment.NewLine, testOutput), 30),
                     ExitCodes.RunInvalid);
             }
 
