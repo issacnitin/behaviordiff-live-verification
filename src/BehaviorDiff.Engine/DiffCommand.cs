@@ -138,18 +138,26 @@ namespace BehaviorDiff.Engine
             }
 
             var lifecycle = new List<ToolingGap>();
+            var generatedLifecycle = new List<ToolingGap>();
             var remainingGaps = new List<ToolingGap>();
             foreach (ToolingGap gap in gaps)
             {
-                if (IsMethodLifecycle(gap)
-                    && gap.MethodFullName is { Length: > 0 } method
-                    && methodFiles.TryGetValue(method, out string? file)
-                    && changedFiles.Contains(file))
+                string? file = gap.MethodFullName is { Length: > 0 } m
+                    && methodFiles.TryGetValue(m, out string? found) ? found : null;
+
+                if (IsMethodLifecycle(gap) && file != null && changedFiles.Contains(file))
                 {
                     lifecycle.Add(gap);
                 }
                 else
                 {
+                    // A generated file is never in a git diff, so path attribution cannot reach it. Say so
+                    // rather than letting the member disappear into the gap list unexplained.
+                    if (IsMethodLifecycle(gap) && FrontierCommand.IsGeneratedSource(file))
+                    {
+                        generatedLifecycle.Add(gap);
+                    }
+
                     remainingGaps.Add(gap);
                 }
             }
@@ -174,6 +182,20 @@ namespace BehaviorDiff.Engine
             foreach (ToolingGap gap in lifecycle.Take(10))
             {
                 Console.WriteLine("    " + gap.BaseState + " -> " + gap.PrState + "  " + gap.MethodFullName);
+            }
+
+            if (generatedLifecycle.Count > 0)
+            {
+                Console.WriteLine("  source-generated members : " + generatedLifecycle.Count
+                    + "  (added or removed, but emitted into obj/ so no git diff can name them)");
+                foreach (ToolingGap gap in generatedLifecycle.Take(10))
+                {
+                    string file = gap.MethodFullName is { Length: > 0 } m && methodFiles.TryGetValue(m, out string? f)
+                        ? f
+                        : "<unresolved>";
+                    Console.WriteLine("    " + gap.BaseState + " -> " + gap.PrState + "  " + gap.MethodFullName);
+                    Console.WriteLine("      source-generated, not in the git diff: " + file);
+                }
             }
             foreach (var group in gaps.GroupBy(g => g.Scope).OrderBy(g => g.Key, StringComparer.Ordinal))
             {

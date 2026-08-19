@@ -390,8 +390,8 @@ namespace BehaviorDiff.Engine
 
             var unexpected = nodes.Where(n => n.Attribution == "UNEXPECTED").ToList();
             var expected = nodes.Where(n => n.Attribution == "EXPECTED").ToList();
-            Console.WriteLine("  EXPECTED (edited file)   : " + expected.Count);
-            Console.WriteLine("  UNEXPECTED (headline)    : " + unexpected.Count);
+            Console.WriteLine("  EXPECTED (edited file)   : " + RollupLine(expected));
+            Console.WriteLine("  UNEXPECTED (headline)    : " + RollupLine(unexpected));
 
             if (refusals.Count > 0)
             {
@@ -413,19 +413,13 @@ namespace BehaviorDiff.Engine
                 Console.WriteLine("  none");
             }
 
-            foreach (FrontierNode node in unexpected)
-            {
-                Print(node);
-            }
+            PrintRollup(unexpected);
 
             if (expected.Count > 0)
             {
                 Console.WriteLine();
                 Console.WriteLine("=== expected (in edited files) ===");
-                foreach (FrontierNode node in expected)
-                {
-                    Print(node);
-                }
+                PrintRollup(expected);
             }
 
             var untested = nodes.Where(n => n.Untested).ToList();
@@ -476,6 +470,55 @@ namespace BehaviorDiff.Engine
                 keys.Add(child.TestId + "|" + child.MethodFullName);
                 methods.Add(child.MethodFullName);
                 CollectDescendants(child, children, keys, methods);
+            }
+        }
+
+        /// <summary>
+        /// Compiler- or generator-emitted source. Such a file is never in a git diff, so it cannot be
+        /// attributed to the PR by path even when the PR is what caused it to be generated.
+        /// </summary>
+        internal static bool IsGeneratedSource(string? path)
+        {
+            if (string.IsNullOrEmpty(path))
+            {
+                return false;
+            }
+
+            return path!.Contains("/obj/", StringComparison.Ordinal)
+                || path.StartsWith("obj/", StringComparison.Ordinal)
+                || path.EndsWith(".g.cs", StringComparison.Ordinal)
+                || path.EndsWith(".generated.cs", StringComparison.Ordinal);
+        }
+
+        /// <summary>"11 member(s), across 2962 call site(s)" - members are the finding, call sites the evidence.</summary>
+        private static string RollupLine(IReadOnlyList<FrontierNode> nodes)
+        {
+            int members = nodes.Select(n => n.MethodFullName).Distinct(StringComparer.Ordinal).Count();
+            return members + " member(s), across " + nodes.Count + " call site(s)";
+        }
+
+        private static void PrintRollup(IReadOnlyList<FrontierNode> nodes)
+        {
+            foreach (var group in nodes
+                .GroupBy(n => n.MethodFullName, StringComparer.Ordinal)
+                .OrderByDescending(g => g.Count()))
+            {
+                FrontierNode first = group.First();
+                Console.WriteLine("  " + (first.Verified ? "frontier" : "frontier_unverified") + "  " + group.Key);
+                Console.WriteLine("    call sites : " + group.Count()
+                    + " (" + group.Select(n => n.TestId).Distinct(StringComparer.Ordinal).Count() + " distinct test(s))");
+                Console.WriteLine("    file       : " + (first.FilePath ?? "<unresolved>")
+                    + (IsGeneratedSource(first.FilePath) ? "   [source-generated, not in the git diff]" : string.Empty));
+
+                foreach (string symptom in group.SelectMany(n => n.Symptoms).Distinct(StringComparer.Ordinal).Take(3))
+                {
+                    Console.WriteLine("    symptom    : " + symptom);
+                }
+
+                foreach (string reason in group.SelectMany(n => n.DowngradeReasons).Distinct(StringComparer.Ordinal).Take(2))
+                {
+                    Console.WriteLine("    downgraded : " + reason);
+                }
             }
         }
 
