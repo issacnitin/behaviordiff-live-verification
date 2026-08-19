@@ -89,6 +89,11 @@ changed file contributed a single traced member, or when path normalization fail
 Azure DevOps PR refs with `--ci=azuredevops`, writes `findings.json`, posts the result, publishes that
 artifact, and deletes the large trace work directory after every job.
 
+`.github/workflows/blastradius.yml` provides the equivalent GitHub Actions path. It resolves the
+immutable `github.event.pull_request.base.sha` and `head.sha` values from `GITHUB_EVENT_PATH`, not
+branch names. Its `actions/checkout` step sets `fetch-depth: 0`; the default depth of 1 cannot create
+both worktrees or calculate their merge base, and `--ci=github` refuses shallow clones explicitly.
+
 Azure Repos PR validation is configured through a **Build validation branch policy**, not a YAML
 `pr` trigger. Attach this pipeline to each target branch that should be checked; that policy is the PR
 trigger. The YAML uses `trigger: none` so source-branch pushes do not duplicate the merge-commit run.
@@ -96,6 +101,8 @@ trigger. The YAML uses `trigger: none` so source-branch pushes do not duplicate 
 ```text
 behaviordiff <repo> --ci=azuredevops --findings findings.json
 behaviordiff post --provider=azuredevops --findings findings.json
+behaviordiff <repo> --ci=github --findings findings.json
+behaviordiff post --provider=github --findings findings.json
 ```
 
 The posting gate defaults to `warn-only`. Set the pipeline variable `behaviorDiffGate` to
@@ -160,6 +167,7 @@ pwsh -File tools/verify-negative-tests.ps1   # a no-PDB assembly invalidates the
 pwsh -File tools/verify-null-task.ps1        # the null-Task path emits exactly once
 pwsh -File tools/verify-diff.ps1 -Mutate -Change config
 pwsh -File tools/verify-ci-refs.ps1          # merge-base refs and invalid findings arms
+pwsh -File tools/verify-github-refs.ps1      # event SHAs and shallow-clone refusal
 pwsh -File tools/verify-mcp.ps1              # MCP reads canonical findings.json
 pwsh -File tools/verify-ado-post.ps1         # local ADO REST contract and idempotency
 pwsh -File tools/verify-pipeline.ps1         # mocked end-to-end CI seams

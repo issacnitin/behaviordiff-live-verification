@@ -137,7 +137,8 @@ namespace BehaviorDiff.Cli
         {
             Console.WriteLine("usage: behaviordiff <repo> --base <ref> --pr <ref> [--work <dir>] [--findings <file>] [--keep]");
             Console.WriteLine("       behaviordiff [<repo>] --ci=azuredevops [--work <dir>] [--findings <file>] [--keep]");
-            Console.WriteLine("       behaviordiff post --provider=azuredevops --findings <file> [--gate warn-only|fail-on-findings]");
+            Console.WriteLine("       behaviordiff [<repo>] --ci=github [--work <dir>] [--findings <file>] [--keep]");
+            Console.WriteLine("       behaviordiff post --provider=<azuredevops|github> --findings <file> [--gate warn-only|fail-on-findings]");
             Console.WriteLine();
             Console.WriteLine("  exit 0  analyzed, no unexpected divergences");
             Console.WriteLine("  exit 1  analyzed, unexpected divergences found");

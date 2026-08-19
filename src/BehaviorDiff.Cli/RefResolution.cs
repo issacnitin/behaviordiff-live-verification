@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 
 namespace BehaviorDiff.Cli
 {
@@ -30,6 +31,7 @@ namespace BehaviorDiff.Cli
     internal static class RefResolution
     {
         internal const string AzureDevOps = "azuredevops";
+        internal const string GitHub = "github";
 
         internal static string ResolveRepository(string? explicitRepository, string? ciProvider)
         {
@@ -43,7 +45,14 @@ namespace BehaviorDiff.Cli
                 return Path.GetFullPath(RequiredEnvironment("BUILD_REPOSITORY_LOCALPATH"));
             }
 
-            throw new CliException("A repository path is required unless --ci=azuredevops supplies BUILD_REPOSITORY_LOCALPATH.");
+            if (ciProvider == GitHub)
+            {
+                return Path.GetFullPath(RequiredEnvironment("GITHUB_WORKSPACE"));
+            }
+
+            throw new CliException(
+                "A repository path is required unless --ci=azuredevops supplies BUILD_REPOSITORY_LOCALPATH "
+                + "or --ci=github supplies GITHUB_WORKSPACE.");
         }
 
         internal static ResolvedRefs Resolve(
@@ -64,17 +73,82 @@ namespace BehaviorDiff.Cli
                 return Create(repository, baseRef, prRef, baseSha, prSha, isCi: false, pullRequestId: null);
             }
 
-            if (ciProvider != AzureDevOps)
+            if (ciProvider != AzureDevOps && ciProvider != GitHub)
             {
-                throw new CliException("Unknown CI provider '" + ciProvider + "'. Supported: azuredevops.");
+                throw new CliException("Unknown CI provider '" + ciProvider + "'. Supported: azuredevops, github.");
             }
 
             if (baseRef is not null || prRef is not null)
             {
-                throw new CliException("--ci=azuredevops derives refs; do not combine it with --base or --pr.");
+                throw new CliException("--ci=" + ciProvider + " derives refs; do not combine it with --base or --pr.");
             }
 
-            return ResolveAzureDevOps(repository);
+            return ciProvider == AzureDevOps
+                ? ResolveAzureDevOps(repository)
+                : ResolveGitHub(repository);
+        }
+
+        private static ResolvedRefs ResolveGitHub(string repository)
+        {
+            string shallow = Shell.Git(repository, "rev-parse", "--is-shallow-repository");
+            if (string.Equals(shallow, "true", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new CliException(
+                    "SHALLOW CLONE: --ci=github requires the pull request base and head history, but this "
+                    + "checkout is shallow. actions/checkout defaults to fetch-depth: 1; set fetch-depth: 0 "
+                    + "so BehaviorDiff can create both worktrees and calculate their merge base.",
+                    ExitCodes.RunInvalid);
+            }
+
+            string eventPath = RequiredEnvironment("GITHUB_EVENT_PATH");
+            if (!File.Exists(eventPath))
+            {
+                throw new CliException("--ci=github requires an existing GITHUB_EVENT_PATH: " + eventPath, ExitCodes.RunInvalid);
+            }
+
+            try
+            {
+                using JsonDocument eventDocument = JsonDocument.Parse(File.ReadAllText(eventPath));
+                JsonElement root = eventDocument.RootElement;
+                if (!root.TryGetProperty("pull_request", out JsonElement pullRequest))
+                {
+                    throw new CliException(
+                        "GITHUB_EVENT_PATH does not contain pull_request. --ci=github must run from a pull_request event.",
+                        ExitCodes.RunInvalid);
+                }
+
+                string baseSha = RequiredJsonString(pullRequest, "base", "sha");
+                string headSha = RequiredJsonString(pullRequest, "head", "sha");
+                string pullRequestId = root.TryGetProperty("number", out JsonElement number)
+                    && number.ValueKind == JsonValueKind.Number
+                    ? number.GetInt32().ToString(CultureInfo.InvariantCulture)
+                    : throw new CliException("GitHub pull_request event has no numeric number.", ExitCodes.RunInvalid);
+
+                // Resolve the immutable payload SHAs locally. A checkout that names the SHAs but did not
+                // fetch their objects is just as unusable as a shallow checkout and should fail here.
+                baseSha = Commit(repository, baseSha);
+                headSha = Commit(repository, headSha);
+
+                Console.WriteLine("  CI provider : GitHub Actions");
+                Console.WriteLine("  PR number   : " + pullRequestId);
+                Console.WriteLine("  repository  : " + RequiredEnvironment("GITHUB_REPOSITORY"));
+                Console.WriteLine("  event       : " + eventPath);
+
+                ResolvedRefs resolved = Create(
+                    repository,
+                    "github.event.pull_request.base.sha",
+                    "github.event.pull_request.head.sha",
+                    baseSha,
+                    headSha,
+                    isCi: true,
+                    pullRequestId);
+                ValidatePlausibility(resolved);
+                return resolved;
+            }
+            catch (JsonException ex)
+            {
+                throw new CliException("GITHUB_EVENT_PATH is malformed JSON: " + ex.Message, ExitCodes.RunInvalid);
+            }
         }
 
         private static ResolvedRefs ResolveAzureDevOps(string repository)
@@ -126,6 +200,13 @@ namespace BehaviorDiff.Cli
                 isCi: true,
                 pullRequestId);
 
+            ValidatePlausibility(resolved);
+
+            return resolved;
+        }
+
+        private static void ValidatePlausibility(ResolvedRefs resolved)
+        {
             int maximum = MaximumChangedFiles();
             Console.WriteLine("  changed-file plausibility limit: " + maximum + " for a PR with at most 3 commits");
             if (resolved.PrCommitCount <= 3 && resolved.ChangedFiles.Count > maximum)
@@ -137,8 +218,6 @@ namespace BehaviorDiff.Cli
                     + "set BEHAVIORDIFF_MAX_CHANGED_FILES only for a reviewed bulk change.",
                     ExitCodes.RunInvalid);
             }
-
-            return resolved;
         }
 
         private static ResolvedRefs Create(
@@ -257,6 +336,21 @@ namespace BehaviorDiff.Cli
             }
 
             return value;
+        }
+
+        private static string RequiredJsonString(JsonElement root, string objectName, string propertyName)
+        {
+            if (root.TryGetProperty(objectName, out JsonElement child)
+                && child.TryGetProperty(propertyName, out JsonElement value)
+                && value.ValueKind == JsonValueKind.String
+                && !string.IsNullOrWhiteSpace(value.GetString()))
+            {
+                return value.GetString()!;
+            }
+
+            throw new CliException(
+                "GitHub pull_request event has no " + objectName + "." + propertyName + ".",
+                ExitCodes.RunInvalid);
         }
     }
 }

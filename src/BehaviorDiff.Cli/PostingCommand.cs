@@ -45,9 +45,9 @@ namespace BehaviorDiff.Cli
                 }
             }
 
-            if (provider != "azuredevops")
+            if (provider != "azuredevops" && provider != "github")
             {
-                throw new CliException("post requires --provider=azuredevops.");
+                throw new CliException("post requires --provider=azuredevops or --provider=github.");
             }
 
             if (findingsPath is null || !File.Exists(findingsPath))
@@ -75,11 +75,18 @@ namespace BehaviorDiff.Cli
                     throw new CliException("Unknown findings status '" + status + "'.");
                 }
 
-                new AzureDevOpsPoster().PostAsync(root).GetAwaiter().GetResult();
+                if (provider == "azuredevops")
+                {
+                    new AzureDevOpsPoster().PostAsync(root).GetAwaiter().GetResult();
+                }
+                else
+                {
+                    new GitHubPoster().PostAsync(root).GetAwaiter().GetResult();
+                }
 
                 if (status != "analyzed")
                 {
-                    Console.WriteLine("##vso[task.logissue type=warning]BehaviorDiff could not analyze this PR; see the posted reason.");
+                    WriteWarning(provider, "BehaviorDiff could not analyze this PR; see the posted reason.");
                     return ExitCodes.NoUnexpected;
                 }
 
@@ -95,7 +102,7 @@ namespace BehaviorDiff.Cli
                     return ExitCodes.UnexpectedFound;
                 }
 
-                Console.WriteLine("##vso[task.logissue type=warning]BehaviorDiff found " + unexpected
+                WriteWarning(provider, "BehaviorDiff found " + unexpected
                     + " unexpected member(s); warn-only gate did not fail the build.");
                 return ExitCodes.NoUnexpected;
             }
@@ -119,5 +126,17 @@ namespace BehaviorDiff.Cli
             element.TryGetProperty(property, out JsonElement value) && value.ValueKind == JsonValueKind.String
                 ? value.GetString() ?? string.Empty
                 : string.Empty;
+
+        private static void WriteWarning(string provider, string message)
+        {
+            if (provider == "azuredevops")
+            {
+                Console.WriteLine("##vso[task.logissue type=warning]" + message);
+            }
+            else
+            {
+                Console.WriteLine("::warning::" + message);
+            }
+        }
     }
 }
