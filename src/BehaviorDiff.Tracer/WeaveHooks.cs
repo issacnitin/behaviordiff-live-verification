@@ -269,6 +269,80 @@ namespace BehaviorDiff.Tracer
         }
 
         /// <summary>
+        /// Async return. The task has not completed, so emission defers to a continuation; the frame is
+        /// captured by that continuation and outlives the method. Order mirrors Harmony exactly: the
+        /// postfix attaches first, then the finalizer runs and sees the deferral flag already set.
+        /// </summary>
+        public static void ExitTask(object? frame, System.Threading.Tasks.Task? result)
+        {
+            if (frame is not CallFrame call)
+            {
+                NoteLostFrame(frame);
+                return;
+            }
+
+            TraceSession.AttachContinuation(call, result, resultRenderer: null);
+            TraceSession.EndCall(call, exception: null);
+        }
+
+        /// <inheritdoc cref="ExitTask" />
+        public static void ExitTaskOf<T>(object? frame, System.Threading.Tasks.Task<T>? result)
+        {
+            if (frame is not CallFrame call)
+            {
+                NoteLostFrame(frame);
+                return;
+            }
+
+            TraceSession.AttachContinuation(
+                call,
+                result,
+                static completed => TraceSession.Render(((System.Threading.Tasks.Task<T>)completed).Result));
+            TraceSession.EndCall(call, exception: null);
+        }
+
+        /// <summary>
+        /// A ValueTask backed by an IValueTaskSource may be consumed once. AsTask performs that single
+        /// consumption and the caller is handed a ValueTask over the resulting Task, which is safe to await
+        /// repeatedly. Returns the replacement rather than taking a ref, which keeps the call site simple.
+        /// </summary>
+        public static System.Threading.Tasks.ValueTask ExitValueTask(
+            object? frame,
+            System.Threading.Tasks.ValueTask result)
+        {
+            if (frame is not CallFrame call)
+            {
+                NoteLostFrame(frame);
+                return result;
+            }
+
+            System.Threading.Tasks.Task task = result.AsTask();
+            TraceSession.AttachContinuation(call, task, resultRenderer: null);
+            TraceSession.EndCall(call, exception: null);
+            return new System.Threading.Tasks.ValueTask(task);
+        }
+
+        /// <inheritdoc cref="ExitValueTask" />
+        public static System.Threading.Tasks.ValueTask<T> ExitValueTaskOf<T>(
+            object? frame,
+            System.Threading.Tasks.ValueTask<T> result)
+        {
+            if (frame is not CallFrame call)
+            {
+                NoteLostFrame(frame);
+                return result;
+            }
+
+            System.Threading.Tasks.Task<T> task = result.AsTask();
+            TraceSession.AttachContinuation(
+                call,
+                task,
+                static completed => TraceSession.Render(((System.Threading.Tasks.Task<T>)completed).Result));
+            TraceSession.EndCall(call, exception: null);
+            return new System.Threading.Tasks.ValueTask<T>(task);
+        }
+
+        /// <summary>
         /// A null frame is legitimate when the tracer is not running; anything else means the weaver emitted
         /// a prologue whose result did not reach the epilogue.
         /// </summary>

@@ -25,6 +25,10 @@ namespace BehaviorDiff.Weaver
             ExitValue = module.ImportReference(hooks.GetMethod(nameof(WeaveHooks.ExitValue)));
             ExitVoid = module.ImportReference(hooks.GetMethod(nameof(WeaveHooks.ExitVoid)));
             ExitException = module.ImportReference(hooks.GetMethod(nameof(WeaveHooks.ExitException)));
+            ExitTask = module.ImportReference(hooks.GetMethod(nameof(WeaveHooks.ExitTask)));
+            ExitTaskOf = module.ImportReference(hooks.GetMethod(nameof(WeaveHooks.ExitTaskOf)));
+            ExitValueTask = module.ImportReference(hooks.GetMethod(nameof(WeaveHooks.ExitValueTask)));
+            ExitValueTaskOf = module.ImportReference(hooks.GetMethod(nameof(WeaveHooks.ExitValueTaskOf)));
             ExceptionType = module.ImportReference(typeof(Exception));
         }
 
@@ -41,6 +45,14 @@ namespace BehaviorDiff.Weaver
         internal MethodReference ExitVoid { get; }
 
         internal MethodReference ExitException { get; }
+
+        internal MethodReference ExitTask { get; }
+
+        internal MethodReference ExitTaskOf { get; }
+
+        internal MethodReference ExitValueTask { get; }
+
+        internal MethodReference ExitValueTaskOf { get; }
 
         internal TypeReference ExceptionType { get; }
     }
@@ -83,18 +95,6 @@ namespace BehaviorDiff.Weaver
 
             Assembly reflected = Assembly.LoadFrom(assemblyPath);
             List<MemberPlan> plans = Descriptors.Plan(reflected, options);
-
-            // Sync only this increment. Async stays in Harmony's scope, so it is declined, not skipped
-            // silently, and the equivalence run accounts for it explicitly.
-            foreach (MemberPlan plan in plans)
-            {
-                if (plan.SkipReason is null
-                    && plan.ReturnKind != ReturnKind.Void
-                    && plan.ReturnKind != ReturnKind.Sync)
-                {
-                    plan.SkipReason = AsyncDecline;
-                }
-            }
 
             int index = 0;
             foreach (MemberPlan plan in plans.Where(p => p.SkipReason is null))
@@ -219,20 +219,52 @@ namespace BehaviorDiff.Weaver
 
             // Epilogue first, so the rewritten returns have a branch target.
             var epilogue = new List<Instruction> { Instruction.Create(OpCodes.Ldloc, frame) };
-            if (isVoid)
+            switch (plan.ReturnKind)
             {
-                epilogue.Add(Instruction.Create(OpCodes.Call, refs.ExitVoid));
-            }
-            else
-            {
-                epilogue.Add(Instruction.Create(OpCodes.Ldloc, result));
-                if (NeedsBox(method.ReturnType))
-                {
-                    epilogue.Add(Instruction.Create(OpCodes.Box, method.ReturnType));
-                }
+                case ReturnKind.Void:
+                    epilogue.Add(Instruction.Create(OpCodes.Call, refs.ExitVoid));
+                    break;
 
-                epilogue.Add(Instruction.Create(OpCodes.Call, refs.ExitValue));
-                epilogue.Add(Instruction.Create(OpCodes.Ldloc, result));
+                case ReturnKind.Sync:
+                    epilogue.Add(Instruction.Create(OpCodes.Ldloc, result));
+                    if (NeedsBox(method.ReturnType))
+                    {
+                        epilogue.Add(Instruction.Create(OpCodes.Box, method.ReturnType));
+                    }
+
+                    epilogue.Add(Instruction.Create(OpCodes.Call, refs.ExitValue));
+                    epilogue.Add(Instruction.Create(OpCodes.Ldloc, result));
+                    break;
+
+                case ReturnKind.Task:
+                    epilogue.Add(Instruction.Create(OpCodes.Ldloc, result));
+                    epilogue.Add(Instruction.Create(OpCodes.Call, refs.ExitTask));
+                    epilogue.Add(Instruction.Create(OpCodes.Ldloc, result));
+                    break;
+
+                case ReturnKind.TaskOfT:
+                    epilogue.Add(Instruction.Create(OpCodes.Ldloc, result));
+                    epilogue.Add(Instruction.Create(OpCodes.Call, Instantiate(refs.ExitTaskOf, method.ReturnType)));
+                    epilogue.Add(Instruction.Create(OpCodes.Ldloc, result));
+                    break;
+
+                // The hook returns the replacement because the original may only be consumed once.
+                case ReturnKind.ValueTask:
+                    epilogue.Add(Instruction.Create(OpCodes.Ldloc, result));
+                    epilogue.Add(Instruction.Create(OpCodes.Call, refs.ExitValueTask));
+                    epilogue.Add(Instruction.Create(OpCodes.Stloc, result));
+                    epilogue.Add(Instruction.Create(OpCodes.Ldloc, result));
+                    break;
+
+                case ReturnKind.ValueTaskOfT:
+                    epilogue.Add(Instruction.Create(OpCodes.Ldloc, result));
+                    epilogue.Add(Instruction.Create(OpCodes.Call, Instantiate(refs.ExitValueTaskOf, method.ReturnType)));
+                    epilogue.Add(Instruction.Create(OpCodes.Stloc, result));
+                    epilogue.Add(Instruction.Create(OpCodes.Ldloc, result));
+                    break;
+
+                default:
+                    throw new InvalidOperationException("unhandled ReturnKind " + plan.ReturnKind);
             }
 
             epilogue.Add(Instruction.Create(OpCodes.Ret));
@@ -325,6 +357,14 @@ namespace BehaviorDiff.Weaver
 
         private static bool NeedsBox(TypeReference type) =>
             type.IsValueType || type.IsGenericParameter;
+
+        /// <summary>Binds the hook's T to the T of the method's Task&lt;T&gt; or ValueTask&lt;T&gt;.</summary>
+        private static MethodReference Instantiate(MethodReference open, TypeReference returnType)
+        {
+            var generic = new GenericInstanceMethod(open);
+            generic.GenericArguments.Add(((GenericInstanceType)returnType).GenericArguments[0]);
+            return generic;
+        }
 
         /// <summary>
         /// Structural assertions. A frame that never reaches the handler yields no event, and a missing
