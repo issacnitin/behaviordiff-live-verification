@@ -12,16 +12,26 @@
 [CmdletBinding()]
 param(
     [switch]$Mutate,
-    [ValidateSet('discount', 'config', 'downgrade')]
+    [ValidateSet('discount', 'retry', 'permission', 'config', 'downgrade')]
     [string]$Change = 'discount',
-    [switch]$SkipPrRebuild
+    [switch]$SkipPrRebuild,
+    [string]$WorkDirectory,
+    [string]$PrTreeDirectory
 )
 
 $ErrorActionPreference = 'Stop'
 
 $repo = Split-Path -Parent $PSScriptRoot
-$prTree = Join-Path (Split-Path -Parent $repo) 'BehaviorDiff-prtree'
-$work = Join-Path ([System.IO.Path]::GetTempPath()) 'behaviordiff-diff'
+$providedPrTree = $PrTreeDirectory
+$runId = [Guid]::NewGuid().ToString('N')
+$ownsPrTree = -not $PrTreeDirectory
+$ownsWork = -not $WorkDirectory
+$prTree = if ($PrTreeDirectory) { $PrTreeDirectory } else { Join-Path ([IO.Path]::GetTempPath()) "behaviordiff-pr-$runId" }
+$work = if ($WorkDirectory) { $WorkDirectory } else { Join-Path ([IO.Path]::GetTempPath()) "behaviordiff-run-$runId" }
+
+if ($SkipPrRebuild -and (-not $providedPrTree -or -not (Test-Path $providedPrTree))) {
+    throw '-SkipPrRebuild requires an existing -PrTreeDirectory.'
+}
 
 function Invoke-Suite([string]$stagedBin, [string]$outputDir) {
     Remove-Item $outputDir -Recurse -Force -ErrorAction SilentlyContinue
@@ -33,13 +43,18 @@ function Invoke-Suite([string]$stagedBin, [string]$outputDir) {
     $env:BEHAVIORDIFF_TRACE = Join-Path $outputDir 'run.ndjson'
 
     dotnet test (Join-Path $stagedBin 'SampleApp.Tests.dll') --nologo | Out-Null
+    return $LASTEXITCODE
 }
+
+function Invoke-Proof {
 
 Write-Host '=== preparing worktrees ===' -ForegroundColor Cyan
 Push-Location $repo
-dotnet build BehaviorDiff.sln -c Release --nologo -v quiet | Out-Null
-if ($LASTEXITCODE -ne 0) { throw 'base build failed' }
-Pop-Location
+try {
+    dotnet build BehaviorDiff.sln -c Release --nologo -v quiet | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'base build failed' }
+}
+finally { Pop-Location }
 
 if (-not $SkipPrRebuild) {
     Remove-Item $prTree -Recurse -Force -ErrorAction SilentlyContinue
@@ -54,7 +69,19 @@ if (-not $SkipPrRebuild) {
         Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 
     if ($Mutate) {
-        if ($Change -eq 'discount') {
+        if ($Change -eq 'retry') {
+            $target = Join-Path $prTree 'samples/SampleApp/RetryPolicyParser.cs'
+            $text = Get-Content $target -Raw
+            $mutated = $text -replace 'DefaultMaxAttempts = 3', 'DefaultMaxAttempts = 2'
+            $label = 'RetryPolicyParser default max attempts 3 -> 2'
+        }
+        elseif ($Change -eq 'permission') {
+            $target = Join-Path $prTree 'samples/SampleApp/PermissionDefaultsParser.cs'
+            $text = Get-Content $target -Raw
+            $mutated = $text -replace 'DefaultRole = "Reader"', 'DefaultRole = "None"'
+            $label = 'PermissionDefaultsParser default role Reader -> None'
+        }
+        elseif ($Change -eq 'discount') {
             $target = Join-Path $prTree 'samples/SampleApp/OrderService.cs'
             $text = Get-Content $target -Raw
             $mutated = $text -replace 'quantity >= 10', 'quantity >= 5'
@@ -81,9 +108,11 @@ if (-not $SkipPrRebuild) {
     }
 
     Push-Location $prTree
-    dotnet build BehaviorDiff.sln -c Release --nologo -v quiet | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'pr worktree build failed' }
-    Pop-Location
+    try {
+        dotnet build BehaviorDiff.sln -c Release --nologo -v quiet | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'pr worktree build failed' }
+    }
+    finally { Pop-Location }
 }
 
 Write-Host "  base worktree : $repo"
@@ -97,11 +126,17 @@ $prBin = Join-Path $work 'pr-bin'
 & $stage -TreeRoot $repo -OutDir $baseBin
 & $stage -TreeRoot $prTree -OutDir $prBin
 
-Invoke-Suite $baseBin (Join-Path $work 'base_run1')
+$base1Exit = Invoke-Suite $baseBin (Join-Path $work 'base_run1')
+if ($base1Exit -ne 0) { throw "base_run1 tests failed: $base1Exit" }
 Write-Host '  base_run1 done'
-Invoke-Suite $baseBin (Join-Path $work 'base_run2')
+$base2Exit = Invoke-Suite $baseBin (Join-Path $work 'base_run2')
+if ($base2Exit -ne 0) { throw "base_run2 tests failed: $base2Exit" }
 Write-Host '  base_run2 done'
-Invoke-Suite $prBin (Join-Path $work 'pr_run')
+$prExit = Invoke-Suite $prBin (Join-Path $work 'pr_run')
+$expectedPrExit = if ($Mutate -and $Change -in @('config', 'downgrade')) { 1 } else { 0 }
+if ($prExit -ne $expectedPrExit) {
+    throw "pr_run test exit was $prExit, expected $expectedPrExit for change '$Change'"
+}
 Write-Host '  pr_run done'
 
 Write-Host ''
@@ -114,7 +149,7 @@ $engineExit = $LASTEXITCODE
 Write-Host ''
 Write-Host "engine exit = $engineExit"
 
-if ($engineExit -ne 0) { exit $engineExit }
+if ($engineExit -ne 0) { return $engineExit }
 
 # Stands in for `git diff --name-only base..pr`, computed by comparing the two worktrees. Repo-relative
 # with forward slashes, matching the Step 0 normalization the traces went through.
@@ -141,7 +176,7 @@ $report = Join-Path $work 'frontier-report.json'
     frontier --in $out --changed-files $changedList --out $report
 
 $frontierExit = $LASTEXITCODE
-if ($frontierExit -ne 0) { exit $frontierExit }
+if ($frontierExit -ne 0) { return $frontierExit }
 
 Write-Host ''
 Write-Host '=== canonical findings ===' -ForegroundColor Cyan
@@ -152,7 +187,7 @@ $findingsExit = if ($frontierDocument.counts.unexpected -gt 0) { 1 } else { 0 }
     findings --divergences $out --frontier $report --out $findings --exit-code $findingsExit `
     --base-sha proof-base --pr-sha proof-pr --merge-base proof-merge-base
 
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+if ($LASTEXITCODE -ne 0) { return $LASTEXITCODE }
 $document = Get-Content $findings -Raw | ConvertFrom-Json
 if ($document.status -ne 'analyzed') { throw "findings status is $($document.status), expected analyzed" }
 if ($document.members.Count -lt 1) { throw 'analyzed findings has no member evidence' }
@@ -162,4 +197,26 @@ Write-Host "  $($document.summary.unexpectedMembers) unexpected member(s), $($do
 Write-Host "  first member evidence count: $($document.members[0].evidence.Count)"
 Write-Host 'findings.json analyzed arm: PASS' -ForegroundColor Green
 
-exit 0
+return 0
+}
+
+$mutex = [Threading.Mutex]::new($false, 'Local\BehaviorDiffVerifyDiff')
+$acquired = $false
+try {
+    try {
+        $acquired = $mutex.WaitOne()
+    }
+    catch [Threading.AbandonedMutexException] {
+        $acquired = $true
+    }
+
+    $proofExit = Invoke-Proof
+}
+finally {
+    if ($acquired) { $mutex.ReleaseMutex() }
+    $mutex.Dispose()
+    if ($ownsWork) { Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue }
+    if ($ownsPrTree) { Remove-Item $prTree -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+exit $proofExit

@@ -4,12 +4,24 @@
   - SettingsParser.cs: executed by five tests on each compared side;
   - README.md: deliberately not executable, and therefore an explicit zero-coverage row.
 #>
+[CmdletBinding()]
+param(
+    [string]$WorkDirectory,
+    [string]$PrTreeDirectory
+)
+
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
-$work = Join-Path ([IO.Path]::GetTempPath()) 'behaviordiff-diff'
+$runId = [Guid]::NewGuid().ToString('N')
+$ownsWork = -not $WorkDirectory
+$ownsPrTree = -not $PrTreeDirectory
+$work = if ($WorkDirectory) { $WorkDirectory } else { Join-Path ([IO.Path]::GetTempPath()) "behaviordiff-coverage-$runId" }
+$prTree = if ($PrTreeDirectory) { $PrTreeDirectory } else { Join-Path ([IO.Path]::GetTempPath()) "behaviordiff-coverage-pr-$runId" }
 $divergences = Join-Path $work 'divergence-set.json'
 
-& (Join-Path $PSScriptRoot 'verify-diff.ps1') -Mutate -Change config
+try {
+& (Join-Path $PSScriptRoot 'verify-diff.ps1') -Mutate -Change config `
+    -WorkDirectory $work -PrTreeDirectory $prTree
 if ($LASTEXITCODE -ne 0) { throw "verify-diff failed: $LASTEXITCODE" }
 if (-not (Test-Path $divergences)) { throw "missing real divergence set: $divergences" }
 
@@ -81,3 +93,8 @@ Write-Host 'PASS: SettingsParser.cs reports 1 member, 5 call sites, 10 calls' -F
 Write-Host 'PASS: README.md reports zero members/calls and makes no behavioral claim' -ForegroundColor Green
 Write-Host 'PASS: concrete values join to exact base/PR call paths and assertion reaction' -ForegroundColor Green
 Write-Host 'verify-coverage: PASS' -ForegroundColor Green
+}
+finally {
+    if ($ownsWork) { Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue }
+    if ($ownsPrTree) { Remove-Item $prTree -Recurse -Force -ErrorAction SilentlyContinue }
+}

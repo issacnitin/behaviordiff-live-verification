@@ -85,8 +85,8 @@ using (var explainer = new AnthropicExplainer(
     "https://example.invalid/v1/messages",
     "claude-sonnet-5"))
 {
-    ModelExplanation? rejected = await explainer.ExplainAsync(member, patches);
-    Assert(rejected is null, "ungrounded response was accepted");
+    ExplanationAttempt rejected = await explainer.ExplainWithDiagnosticsAsync(member, patches);
+    Assert(rejected.Explanation is null, "ungrounded response was accepted");
 }
 
 string fabricatedCitationText = JsonSerializer.Serialize(new
@@ -113,8 +113,8 @@ using (var explainer = new AnthropicExplainer(
     "https://example.invalid/v1/messages",
     "claude-sonnet-5"))
 {
-    ModelExplanation? rejected = await explainer.ExplainAsync(member, patches);
-    Assert(rejected is null, "fabricated evidence citations were accepted");
+    ExplanationAttempt rejected = await explainer.ExplainWithDiagnosticsAsync(member, patches);
+    Assert(rejected.Explanation is null, "fabricated evidence citations were accepted");
 }
 
 string wrongCaseText = acceptedText.Replace("IsFreeShipping", "isFreeShipping", StringComparison.Ordinal);
@@ -125,8 +125,36 @@ using (var explainer = new AnthropicExplainer(
     "https://example.invalid/v1/messages",
     "claude-sonnet-5"))
 {
-    ModelExplanation? rejected = await explainer.ExplainAsync(member, patches);
-    Assert(rejected is null, "wrong-case grounding literal was accepted");
+    ExplanationAttempt rejected = await explainer.ExplainWithDiagnosticsAsync(member, patches);
+    Assert(rejected.Explanation is null, "wrong-case grounding literal was accepted");
+}
+
+const string errorBody = "{\"type\":\"error\",\"error\":{\"message\":\"proof failure\"}}";
+var errorHandler = new FakeHandler(errorBody, statusCode: HttpStatusCode.BadRequest);
+using (var explainer = new AnthropicExplainer(
+    "proof-key",
+    errorHandler,
+    "https://example.invalid/v1/messages",
+    "claude-sonnet-5"))
+{
+    ExplanationAttempt attempt = await explainer.ExplainWithDiagnosticsAsync(member, patches);
+    Assert(attempt.RawResponse == errorBody, "non-success raw response was lost");
+    Assert(attempt.Explanation is null && attempt.Validation.Contains("400", StringComparison.Ordinal),
+        "non-success response was not reported as rejected");
+}
+
+const string malformedBody = "not-json";
+var malformedHandler = new FakeHandler(malformedBody);
+using (var explainer = new AnthropicExplainer(
+    "proof-key",
+    malformedHandler,
+    "https://example.invalid/v1/messages",
+    "claude-sonnet-5"))
+{
+    ExplanationAttempt attempt = await explainer.ExplainWithDiagnosticsAsync(member, patches);
+    Assert(attempt.RawResponse == malformedBody, "malformed raw response was lost");
+    Assert(attempt.Explanation is null && attempt.Validation.Contains("malformed", StringComparison.Ordinal),
+        "malformed response was not reported as rejected");
 }
 
 string marker = "<!-- proof -->";
@@ -298,6 +326,7 @@ Console.WriteLine();
 Console.WriteLine("PASS: one request per unexpected member");
 Console.WriteLine("PASS: prompt contains observations, paths, assertion reaction, and diff hunk");
 Console.WriteLine("PASS: missing/wrong-case literals and fabricated citations are rejected");
+Console.WriteLine("PASS: raw non-success and malformed responses survive diagnostic validation");
 Console.WriteLine("PASS: deterministic post precedes enrichment and the same comment is patched");
 Console.WriteLine("PASS: no-key posting never invokes Anthropic");
 Console.WriteLine("PASS: oversized evidence falls back below GitHub's body limit");
@@ -320,7 +349,10 @@ static void Assert(bool condition, string message)
     }
 }
 
-sealed class FakeHandler(string responseBody, Action? onRequest = null) : HttpMessageHandler
+sealed class FakeHandler(
+    string responseBody,
+    Action? onRequest = null,
+    HttpStatusCode statusCode = HttpStatusCode.OK) : HttpMessageHandler
 {
     internal int RequestCount { get; private set; }
 
@@ -341,7 +373,7 @@ sealed class FakeHandler(string responseBody, Action? onRequest = null) : HttpMe
             : await request.Content.ReadAsStringAsync(cancellationToken);
         SawApiKey = request.Headers.Contains("X-Api-Key");
         SawVersion = request.Headers.Contains("anthropic-version");
-        return new HttpResponseMessage(HttpStatusCode.OK)
+        return new HttpResponseMessage(statusCode)
         {
             Content = new StringContent(responseBody, Encoding.UTF8, "application/json"),
         };

@@ -7,15 +7,25 @@
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $mcp = Join-Path $repo 'src/BehaviorDiff.Mcp'
-$runsRoot = Join-Path ([System.IO.Path]::GetTempPath()) 'behaviordiff-mcp-runs'
-$source = Join-Path ([System.IO.Path]::GetTempPath()) 'behaviordiff-diff'
+$proofId = [Guid]::NewGuid().ToString('N')
+$runsRoot = Join-Path ([IO.Path]::GetTempPath()) "behaviordiff-mcp-runs-$proofId"
+$source = Join-Path ([IO.Path]::GetTempPath()) "behaviordiff-mcp-source-$proofId"
+$proofPrTree = Join-Path ([IO.Path]::GetTempPath()) "behaviordiff-mcp-pr-$proofId"
 
-foreach ($f in 'findings.json', 'divergence-set.json') {
-    if (-not (Test-Path (Join-Path $source $f))) {
-        throw "missing $f in $source - run: pwsh tools/verify-diff.ps1 -Mutate -Change config"
+try {
+    & (Join-Path $PSScriptRoot 'verify-diff.ps1') -Mutate -Change config `
+        -WorkDirectory $source -PrTreeDirectory $proofPrTree
+    if ($LASTEXITCODE -ne 0) { throw "could not generate isolated MCP artifacts: $LASTEXITCODE" }
+    foreach ($f in 'findings.json', 'divergence-set.json') {
+        if (-not (Test-Path (Join-Path $source $f))) { throw "missing generated $f in $source" }
     }
 }
+catch {
+    Remove-Item $runsRoot, $source, $proofPrTree -Recurse -Force -ErrorAction SilentlyContinue
+    throw
+}
 
+try {
 Remove-Item $runsRoot -Recurse -Force -ErrorAction SilentlyContinue
 $runId = 'proof-sampleapp'
 $runDir = Join-Path $runsRoot $runId
@@ -80,7 +90,7 @@ if (-not $p.HasExited) { $p.Kill() }
 if ($responses.Count -eq 0) {
     Write-Host 'no JSON-RPC responses on stdout; stderr follows:' -ForegroundColor Red
     Write-Host $p.StandardError.ReadToEnd()
-    exit 1
+    throw 'MCP server returned no JSON-RPC responses'
 }
 
 $fail = 0
@@ -136,8 +146,26 @@ if ($bad.error -and $bad.is_clean_result -eq $false) { Write-Host '  PASS: refus
 else { Write-Host '  FAIL: an unknown run did not refuse' -ForegroundColor Red; $fail++ }
 
 Write-Host ''
-if ($fail -eq 0) { Write-Host 'verify-mcp: PASS' -ForegroundColor Green; exit 0 }
-Write-Host "verify-mcp: FAIL ($fail)" -ForegroundColor Red
-exit 1
+if ($fail -eq 0) {
+    Write-Host 'verify-mcp: PASS' -ForegroundColor Green
+    $proofExit = 0
+}
+else {
+    Write-Host "verify-mcp: FAIL ($fail)" -ForegroundColor Red
+    $proofExit = 1
+}
+
+}
+finally {
+    if ($null -ne $p -and -not $p.HasExited) {
+        $p.Kill()
+        $p.WaitForExit(10000) | Out-Null
+    }
+    if ($null -ne $p) { $p.Dispose() }
+    Remove-Item Env:BEHAVIORDIFF_RUNS -ErrorAction SilentlyContinue
+    Remove-Item $runsRoot, $source, $proofPrTree -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+exit $proofExit
 
 

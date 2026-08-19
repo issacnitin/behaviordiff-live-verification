@@ -26,22 +26,57 @@ The finding that matters is the one in a file the pull request never touched.
 
 ## The demo
 
-**Part one — SampleApp, the config parser.** A one-line change to a default constant in
-`SettingsParser.cs`. The finding surfaces in `ShippingCalculator.cs`, a file the change never touched,
-with six diverging keys collapsing to two findings.
+**Primary — retry-policy default.** A one-line default change in `RetryPolicyParser.cs` leaves the
+parser's traced `(args, void return)` behavior identical, but changes `RetryEvaluator.ShouldRetry(2)`
+from `true` to `false`. Three propagated divergences collapse to one unexpected, untested headline.
+
+```powershell
+pwsh -File tools/verify-diff.ps1 -Mutate -Change retry
+```
+
+```text
+collapse                 : 3 diverged keys -> 1 frontier node(s)  (3.0x)
+EXPECTED (edited file)   : 0 member(s), across 0 call site(s)
+UNEXPECTED (headline)    : 1 member(s), across 1 call site(s)
+   frontier  SampleApp.RetryEvaluator.ShouldRetry(System.Int32)
+   untested: True
+```
+
+**Secondary — permission default.** `PermissionDefaultsParser.cs` changes `Reader` to `None`; the
+unedited `PermissionEvaluator.CanRead()` changes from `true` to `false`. Two diverged keys collapse to
+one unexpected, untested headline.
+
+```powershell
+pwsh -File tools/verify-diff.ps1 -Mutate -Change permission
+```
+
+**Third mode — config parser.** The original `SettingsParser.cs` threshold mutation remains available;
+its six diverged keys collapse to two call-site frontiers for one unexpected member.
 
 ```powershell
 pwsh -File tools/verify-diff.ps1 -Mutate -Change config
 ```
 
-```text
-collapse                 : 6 diverged keys -> 2 frontier node(s)  (3.0x)
-EXPECTED (edited file)   : 0 member(s), across 0 call site(s)
-UNEXPECTED (headline)    : 1 member(s), across 2 call site(s)
-  file : samples/SampleApp/ShippingCalculator.cs
+All three demo modes enforce the same constraints in one proof: the edited parser is exercised but has
+no divergence/frontier footprint, collapse is above `1x`, and the headline has an `untested: True`
+observation.
+
+```powershell
+pwsh -File tools/verify-demo-fixtures.ps1
 ```
 
-**Part two — FluentValidation, a real merged PR.** Upstream PR #2136 removes sync-over-async across
+To run the production Anthropic explainer for one mode, enter the key directly in the terminal and run:
+
+```powershell
+$env:ANTHROPIC_API_KEY = Read-Host -MaskInput 'Anthropic API key'
+pwsh -File tools/run-real-explainer.ps1 -Change retry
+```
+
+The command prints the raw Messages API response, the unchanged literal/citation validation verdict,
+and the final rendered comment. A validation rejection exits nonzero and is reported without weakening
+the checks.
+
+**Scale case — FluentValidation, a real merged PR.** Upstream PR #2136 removes sync-over-async across
 `AbstractValidator` and the internal rule-execution path. Demonstrates the tool at scale on a library
 nobody here wrote.
 
@@ -201,6 +236,7 @@ pwsh -File tools/verify-ci-refs.ps1          # merge-base refs and invalid findi
 pwsh -File tools/verify-github-refs.ps1      # event SHAs and shallow-clone refusal
 pwsh -File tools/verify-coverage.ps1         # values, paths, assertion reaction, and coverage honesty
 pwsh -File tools/verify-anthropic.ps1        # one request/member and grounded-output rejection
+pwsh -File tools/verify-demo-fixtures.ps1    # retry, permission, config constraints
 pwsh -File tools/verify-mcp.ps1              # MCP reads canonical findings.json
 pwsh -File tools/verify-ado-post.ps1         # local ADO REST contract and idempotency
 pwsh -File tools/verify-pipeline.ps1         # mocked end-to-end CI seams

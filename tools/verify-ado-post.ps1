@@ -10,17 +10,29 @@
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $cli = Join-Path $repo 'src/BehaviorDiff.Cli/BehaviorDiff.Cli.csproj'
-$findings = Join-Path ([System.IO.Path]::GetTempPath()) 'behaviordiff-diff/findings.json'
-$recording = Join-Path ([System.IO.Path]::GetTempPath()) 'behaviordiff-ado-mock.ndjson'
-$refusal = Join-Path ([System.IO.Path]::GetTempPath()) 'behaviordiff-ado-refusal.json'
-$clean = Join-Path ([System.IO.Path]::GetTempPath()) 'behaviordiff-ado-clean.json'
-$ready = Join-Path ([System.IO.Path]::GetTempPath()) 'behaviordiff-ado-mock.ready'
-$port = 18741
+$runId = [Guid]::NewGuid().ToString('N')
+$proofWork = Join-Path ([IO.Path]::GetTempPath()) "behaviordiff-ado-$runId"
+$proofPrTree = Join-Path ([IO.Path]::GetTempPath()) "behaviordiff-ado-pr-$runId"
+$findings = Join-Path $proofWork 'findings.json'
+$recording = Join-Path $proofWork 'ado-mock.ndjson'
+$refusal = Join-Path $proofWork 'ado-refusal.json'
+$clean = Join-Path $proofWork 'ado-clean.json'
+$ready = Join-Path $proofWork 'ado-mock.ready'
+$port = 0
 
-if (-not (Test-Path $findings)) {
-    throw "missing real SampleApp findings at $findings - run: pwsh tools/verify-diff.ps1 -Mutate -Change config"
+try {
+    & (Join-Path $PSScriptRoot 'verify-diff.ps1') -Mutate -Change config `
+        -WorkDirectory $proofWork -PrTreeDirectory $proofPrTree
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $findings)) {
+        throw "could not generate isolated SampleApp findings: $LASTEXITCODE"
+    }
+}
+catch {
+    Remove-Item $proofWork, $proofPrTree -Recurse -Force -ErrorAction SilentlyContinue
+    throw
 }
 
+try {
 Remove-Item $recording, $refusal, $clean, $ready -Force -ErrorAction SilentlyContinue
 @{
     schema = 'behaviordiff.findings/1'; status = 'refused'; verdict = 'could_not_analyze'
@@ -44,7 +56,7 @@ $server = Start-Job -ArgumentList $port, $recording, $ready -ScriptBlock {
     $ErrorActionPreference = 'Stop'
     $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, $port)
     $listener.Start()
-    Set-Content $ready 'ready'
+    Set-Content $ready ([Net.IPEndPoint]$listener.LocalEndpoint).Port
     $threads = @()
     $nextThread = 100
 
@@ -126,6 +138,7 @@ try {
     while (-not (Test-Path $ready)) {
         if ([DateTime]::UtcNow -gt $readyDeadline) { throw 'local ADO mock did not become ready' }
     }
+    $port = [int](Get-Content $ready -Raw)
 
     dotnet build $cli -c Release --nologo -v quiet | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'CLI build failed' }
@@ -200,6 +213,16 @@ finally {
     Stop-Job $server -ErrorAction SilentlyContinue
     Remove-Job $server -Force -ErrorAction SilentlyContinue
     Remove-Item Env:SYSTEM_ACCESSTOKEN, Env:SYSTEM_COLLECTIONURI, Env:SYSTEM_TEAMPROJECT, Env:BUILD_REPOSITORY_ID, Env:SYSTEM_PULLREQUEST_PULLREQUESTID -ErrorAction SilentlyContinue
+    Remove-Item $proofWork, $proofPrTree -Recurse -Force -ErrorAction SilentlyContinue
+}
+}
+catch {
+    if ($null -ne $server) {
+        Stop-Job $server -ErrorAction SilentlyContinue
+        Remove-Job $server -Force -ErrorAction SilentlyContinue
+    }
+    Remove-Item $proofWork, $proofPrTree -Recurse -Force -ErrorAction SilentlyContinue
+    throw
 }
 
 Write-Host ''

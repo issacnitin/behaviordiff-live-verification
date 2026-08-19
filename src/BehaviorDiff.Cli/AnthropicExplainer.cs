@@ -14,6 +14,11 @@ namespace BehaviorDiff.Cli
 
     internal sealed record ModelExplanation(string Why, string Test, string Model);
 
+    internal sealed record ExplanationAttempt(
+        string RawResponse,
+        ModelExplanation? Explanation,
+        string Validation);
+
     /// <summary>Optional, evidence-constrained explanation. Deterministic findings never depend on this client.</summary>
     internal sealed class AnthropicExplainer : IDisposable
     {
@@ -41,6 +46,19 @@ namespace BehaviorDiff.Cli
             JsonElement member,
             IReadOnlyList<ChangedFilePatch> patches)
         {
+            ExplanationAttempt attempt = await ExplainWithDiagnosticsAsync(member, patches).ConfigureAwait(false);
+            if (attempt.Explanation is null)
+            {
+                throw new CliException(attempt.Validation);
+            }
+
+            return attempt.Explanation;
+        }
+
+        internal async Task<ExplanationAttempt> ExplainWithDiagnosticsAsync(
+            JsonElement member,
+            IReadOnlyList<ChangedFilePatch> patches)
+        {
             string[] groundingLiterals = GroundingLiterals(member, patches);
             string[] citationCorpus = CitationCorpus(member, patches);
             string prompt = BuildPrompt(member, patches, groundingLiterals, citationCorpus);
@@ -63,11 +81,34 @@ namespace BehaviorDiff.Cli
             string responseBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
-                throw new CliException("Anthropic Messages API returned " + (int)response.StatusCode + " "
-                    + response.StatusCode + ": " + Truncate(responseBody));
+                return new ExplanationAttempt(
+                    responseBody,
+                    null,
+                    "REJECTED: Anthropic Messages API returned " + (int)response.StatusCode + " " + response.StatusCode);
             }
 
-            return ParseAndValidate(responseBody, groundingLiterals, citationCorpus, _model);
+            ModelExplanation? explanation;
+            try
+            {
+                explanation = ParseAndValidate(
+                    responseBody,
+                    groundingLiterals,
+                    citationCorpus,
+                    _model);
+            }
+            catch (Exception ex) when (ex is JsonException or InvalidOperationException or KeyNotFoundException)
+            {
+                return new ExplanationAttempt(
+                    responseBody,
+                    null,
+                    "REJECTED: malformed Anthropic response: " + ex.Message);
+            }
+            return new ExplanationAttempt(
+                responseBody,
+                explanation,
+                explanation is null
+                    ? "REJECTED: response failed required literal or exact-citation validation"
+                    : "ACCEPTED: response passed required literal and exact-citation validation");
         }
 
         public void Dispose() => _client.Dispose();
