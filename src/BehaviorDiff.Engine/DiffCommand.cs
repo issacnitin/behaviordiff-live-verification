@@ -525,6 +525,9 @@ namespace BehaviorDiff.Engine
                     methodFullName = d.Key.MethodFullName,
                     kind = d.Kind.ToString(),
                     detail = d.Detail,
+                    isTestRoot = base1.Members.TryGetValue(d.Key.MethodFullName, out var member)
+                        ? member.IsTestRoot
+                        : (bool?)null,
                 }).ToArray(),
                 coverage = new
                 {

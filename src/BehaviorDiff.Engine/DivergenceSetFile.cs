@@ -90,6 +90,9 @@ namespace BehaviorDiff.Engine
         [JsonPropertyName("methodFullName")] public string MethodFullName { get; set; } = string.Empty;
 
         [JsonPropertyName("kind")] public string Kind { get; set; } = string.Empty;
+
+        // Null means an older artifact that predates root classification; treat it conservatively.
+        [JsonPropertyName("isTestRoot")] public bool? IsTestRoot { get; set; }
     }
 
     internal sealed class GapDto
@@ -119,6 +122,8 @@ namespace BehaviorDiff.Engine
         [JsonPropertyName("skipReason")] public string? SkipReason { get; set; }
 
         [JsonPropertyName("sourceResolution")] public string? SourceResolution { get; set; }
+
+        [JsonPropertyName("isTestRoot")] public bool IsTestRoot { get; set; }
     }
 
     internal sealed class CoverageAssemblyDto

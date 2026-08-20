@@ -190,7 +190,11 @@ namespace BehaviorDiff.Engine
                 }
             }
 
-            var harnessDivergedTests = new HashSet<string>(set.HarnessDivergences.Select(h => h.TestId), StringComparer.Ordinal);
+            var harnessDivergedTests = new HashSet<string>(
+                set.HarnessDivergences
+                    .Where(h => h.IsTestRoot != false)
+                    .Select(h => h.TestId),
+                StringComparer.Ordinal);
 
             Console.WriteLine();
             Console.WriteLine("=== frontier ===");
