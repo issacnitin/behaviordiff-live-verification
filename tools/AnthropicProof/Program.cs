@@ -72,6 +72,7 @@ Assert(acceptedHandler.LastRequestBody.Contains("baseCallPath", StringComparison
 Assert(acceptedHandler.LastRequestBody.Contains("assertionReaction", StringComparison.Ordinal), "untested evidence missing from prompt");
 Assert(acceptedHandler.LastRequestBody.Contains("CONSEQUENCE:", StringComparison.Ordinal), "downstream consequence missing from prompt");
 Assert(acceptedHandler.LastRequestBody.Contains("do not restate them", StringComparison.Ordinal), "prompt does not prohibit evidence restatement");
+Assert(acceptedHandler.LastRequestBody.Contains("do not mention returns", StringComparison.Ordinal), "prompt does not prohibit outcome restatement");
 Assert(acceptedHandler.SawApiKey && acceptedHandler.SawVersion, "required Anthropic headers missing");
 
 string rejectedText = JsonSerializer.Serialize(new
@@ -127,6 +128,30 @@ using (var explainer = new AnthropicExplainer(
 {
     ExplanationAttempt rejected = await explainer.ExplainWithDiagnosticsAsync(member, patches);
     Assert(rejected.Explanation is null, "three-sentence causal explanation was accepted");
+}
+
+string restatedOutcomeText = JsonSerializer.Serialize(new
+{
+    why = new
+    {
+        text = "DefaultFreeShippingThreshold changes the value consumed by IsFreeShipping, so the observed result returns true instead of false.",
+        citations = whyCitations,
+    },
+    test = new
+    {
+        text = "Add a focused IsFreeShipping regression test for the default threshold.",
+        citations = new[] { observationCitation },
+    },
+});
+var restatedOutcomeHandler = new FakeHandler(Response(restatedOutcomeText));
+using (var explainer = new AnthropicExplainer(
+    "proof-key",
+    restatedOutcomeHandler,
+    "https://example.invalid/v1/messages",
+    "claude-sonnet-5"))
+{
+    ExplanationAttempt rejected = await explainer.ExplainWithDiagnosticsAsync(member, patches);
+    Assert(rejected.Explanation is null, "causal explanation that restated deterministic outcomes was accepted");
 }
 
 string fabricatedCitationText = JsonSerializer.Serialize(new
