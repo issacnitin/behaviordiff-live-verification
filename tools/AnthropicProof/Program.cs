@@ -45,7 +45,7 @@ string acceptedText = JsonSerializer.Serialize(new
 {
     why = new
     {
-        text = "The PR changes DefaultFreeShippingThreshold, and IsFreeShipping now returns true instead of false for the observed input 40.",
+        text = "The PR changes DefaultFreeShippingThreshold, which is consumed by the unedited IsFreeShipping predicate.",
         citations = whyCitations,
     },
     test = new
@@ -71,6 +71,7 @@ Assert(acceptedHandler.LastRequestBody.Contains("DefaultFreeShippingThreshold", 
 Assert(acceptedHandler.LastRequestBody.Contains("baseCallPath", StringComparison.Ordinal), "call path missing from prompt");
 Assert(acceptedHandler.LastRequestBody.Contains("assertionReaction", StringComparison.Ordinal), "untested evidence missing from prompt");
 Assert(acceptedHandler.LastRequestBody.Contains("CONSEQUENCE:", StringComparison.Ordinal), "downstream consequence missing from prompt");
+Assert(acceptedHandler.LastRequestBody.Contains("do not restate them", StringComparison.Ordinal), "prompt does not prohibit evidence restatement");
 Assert(acceptedHandler.SawApiKey && acceptedHandler.SawVersion, "required Anthropic headers missing");
 
 string rejectedText = JsonSerializer.Serialize(new
@@ -102,6 +103,30 @@ using (var explainer = new AnthropicExplainer(
 {
     ExplanationAttempt rejected = await explainer.ExplainWithDiagnosticsAsync(member, patches);
     Assert(rejected.Explanation is null, "ungrounded response was accepted");
+}
+
+string verboseText = JsonSerializer.Serialize(new
+{
+    why = new
+    {
+        text = "DefaultFreeShippingThreshold changes the value consumed by IsFreeShipping. The causal chain is direct. This third sentence exceeds the limit.",
+        citations = whyCitations,
+    },
+    test = new
+    {
+        text = "Add a focused IsFreeShipping regression test for the default threshold.",
+        citations = new[] { observationCitation },
+    },
+});
+var verboseHandler = new FakeHandler(Response(verboseText));
+using (var explainer = new AnthropicExplainer(
+    "proof-key",
+    verboseHandler,
+    "https://example.invalid/v1/messages",
+    "claude-sonnet-5"))
+{
+    ExplanationAttempt rejected = await explainer.ExplainWithDiagnosticsAsync(member, patches);
+    Assert(rejected.Explanation is null, "three-sentence causal explanation was accepted");
 }
 
 string fabricatedCitationText = JsonSerializer.Serialize(new
@@ -188,8 +213,18 @@ string withKey = GitHubPoster.RenderSummary(
     explanations);
 Assert(!withoutKey.Contains("Optional model explanation", StringComparison.Ordinal), "no-key comment contains model output");
 Assert(withKey.Contains("Optional model explanation", StringComparison.Ordinal), "key-enabled comment omitted accepted model output");
-Assert(withKey.Contains("accepted only after literal and exact-citation grounding checks", StringComparison.Ordinal), "model output is not labeled as validated");
+Assert(withKey.Contains("grounded", StringComparison.Ordinal), "model output is not labeled as grounded");
 Assert(!withKey.Contains("422", StringComparison.Ordinal), "comment leaked raw GitHub 422 details");
+Assert(withoutKey.StartsWith("## BehaviorDiff: 1 behavior change outside this diff", StringComparison.Ordinal),
+    "comment does not lead with the outside-diff change count");
+Assert(withoutKey.Contains("**`ShippingCalculator.IsFreeShipping` changed, but this PR didn't edit it.**", StringComparison.Ordinal),
+    "comment does not lead with the unedited member");
+Assert(withoutKey.Contains("<details><summary>Why, and the evidence</summary>", StringComparison.Ordinal),
+    "evidence is not collapsed under details");
+Assert(withoutKey.Contains("**Distinct call paths**", StringComparison.Ordinal), "deduplicated call paths section is missing");
+Assert(!withoutKey.Contains("Unexpected means", StringComparison.Ordinal), "obsolete unexpected explainer remains");
+Assert(!withoutKey.Contains("k__BackingField", StringComparison.Ordinal), "comment leaked compiler backing-field syntax");
+Assert(withoutKey.Contains("_1 of 2 edited files exercised.", StringComparison.Ordinal), "coverage/source footer is missing");
 
 JsonObject oversized = JsonNode.Parse(File.ReadAllText(args[0]))?.AsObject()
     ?? throw new InvalidOperationException("could not create oversized findings proof");

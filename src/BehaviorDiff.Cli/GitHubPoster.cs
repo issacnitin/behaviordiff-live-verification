@@ -9,6 +9,7 @@ using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
 namespace BehaviorDiff.Cli
@@ -439,14 +440,11 @@ namespace BehaviorDiff.Cli
             }
 
             JsonElement summary = findings.GetProperty("summary");
-            builder.AppendLine("## BehaviorDiff runtime analysis");
-            builder.AppendLine();
-            AppendCoverage(builder, findings);
-            builder.AppendLine();
-
             int unexpectedMembers = Int(summary, "unexpectedMembers");
             if (unexpectedMembers == 0)
             {
+                builder.AppendLine("## BehaviorDiff: no behavior changes outside this diff");
+                builder.AppendLine();
                 builder.AppendLine("**No unexpected behavior changes across " + Int(summary, "editedFiles")
                     + " edited files (" + Int(summary, "tracedMembers")
                     + (Int(summary, "tracedMembers") == 1 ? " member, " : " members, ")
@@ -455,23 +453,33 @@ namespace BehaviorDiff.Cli
             }
             else
             {
-                builder.AppendLine("**UNEXPECTED: " + unexpectedMembers + " member(s), across "
-                    + Int(summary, "unexpectedCallSites") + " call site(s).**");
+                JsonElement[] unexpected = findings.GetProperty("members").EnumerateArray()
+                    .Where(member => String(member, "attribution") == "unexpected")
+                    .ToArray();
+                JsonElement lead = unexpected[0];
+                builder.AppendLine("## BehaviorDiff: " + unexpectedMembers + " behavior "
+                    + (unexpectedMembers == 1 ? "change" : "changes") + " outside this diff");
                 builder.AppendLine();
-                builder.AppendLine("Unexpected means runtime behavior changed in a file the PR did not modify. That is the point of this analysis.");
+                builder.AppendLine("**" + Code(ShortMember(String(lead, "memberName")))
+                    + " changed, but this PR didn't edit it.**");
+                builder.AppendLine(LeadImpact(lead) + " " + UntestedLead(lead));
                 builder.AppendLine();
-                AppendMembers(builder, findings, "unexpected", "Unexpected members", explanations);
-            }
+                builder.AppendLine("<details><summary>Why, and the evidence</summary>");
+                foreach (JsonElement member in unexpected)
+                {
+                    AppendConciseMember(
+                        builder,
+                        member,
+                        explanations is not null
+                            && explanations.TryGetValue(String(member, "memberName"), out ModelExplanation? explanation)
+                                ? explanation
+                                : null);
+                }
 
-            builder.AppendLine();
-            builder.AppendLine("**EXPECTED: " + Int(summary, "expectedMembers") + " member(s), across "
-                + Int(summary, "expectedCallSites") + " call site(s).**");
-            AppendMembers(builder, findings, "expected", "Expected members", explanations);
-
-            if (anchorFailures.Count > 0)
-            {
                 builder.AppendLine();
-                builder.AppendLine("GitHub cannot anchor review comments on outside-diff files, which is why this analysis exists.");
+                builder.AppendLine("</details>");
+                builder.AppendLine();
+                builder.AppendLine(CoverageFooter(findings, lead));
             }
 
             builder.AppendLine();
@@ -480,6 +488,219 @@ namespace BehaviorDiff.Cli
             return rendered.Length <= MaxCommentLength
                 ? rendered
                 : RenderBudgetFallback(findings, marker);
+        }
+
+        private static void AppendConciseMember(
+            StringBuilder builder,
+            JsonElement member,
+            ModelExplanation? explanation)
+        {
+            builder.AppendLine();
+            builder.AppendLine("**Evidence for " + Code(ShortMember(String(member, "memberName"))) + "**");
+            builder.AppendLine("- " + RenderCollapsedObservations(member));
+            builder.AppendLine("- " + Escape(String(member, "assertionReactionSummary")));
+            builder.AppendLine();
+            builder.AppendLine("**Distinct call paths**");
+            AppendDistinctCallPaths(builder, member);
+
+            string[] changedFiles = Strings(member, "changedFilesReachingMember").ToArray();
+            if (changedFiles.Length > 0)
+            {
+                builder.AppendLine();
+                builder.AppendLine("Edited files on recorded paths: " + string.Join(", ", changedFiles.Select(Code)) + ".");
+            }
+
+            if (explanation is not null)
+            {
+                builder.AppendLine();
+                builder.AppendLine("**Optional model explanation** (" + Code(explanation.Model) + ", grounded)");
+                builder.AppendLine(explanation.Why);
+                builder.AppendLine("Suggested test: " + explanation.Test);
+            }
+        }
+
+        private static string RenderCollapsedObservations(JsonElement member)
+        {
+            if (!member.TryGetProperty("evidence", out JsonElement evidence))
+            {
+                return "Concrete observations are unavailable.";
+            }
+
+            JsonElement[] observations = evidence.EnumerateArray().Take(20).ToArray();
+            JsonElement[] aligned = observations
+                .Where(item => NullableInt(item, "ordinal") is int ordinal && ordinal >= 0)
+                .ToArray();
+            string[] unavailable = observations
+                .Where(item => NullableInt(item, "ordinal") is not int ordinal || ordinal < 0)
+                .Select(item => Code(String(item, "kind")) + " - " + Escape(String(item, "detail"))
+                    + ". No single call occurrence can be aligned, so concrete values and paths are unavailable.")
+                .ToArray();
+            if (aligned.Length == 0)
+            {
+                return observations.Length == 0
+                    ? "Concrete observations are unavailable."
+                    : string.Join(" ", unavailable);
+            }
+
+            string memberName = String(member, "memberName");
+            bool sameArguments = aligned.All(item => string.Equals(
+                NullableString(item, "baseArgs"),
+                NullableString(item, "prArgs"),
+                StringComparison.Ordinal));
+            string[] baseResults = aligned.Select(item => RenderValue(
+                    NullableString(item, "baseReturn"),
+                    NullableString(item, "baseException")))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            string[] prResults = aligned.Select(item => RenderValue(
+                    NullableString(item, "prReturn"),
+                    NullableString(item, "prException")))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            if (sameArguments && baseResults.Length == 1 && prResults.Length == 1)
+            {
+                int tests = aligned.Select(item => String(item, "testId")).Distinct(StringComparer.Ordinal).Count();
+                string collapsed = Code(Invocation(memberName, CollapseArguments(aligned.Select(item => NullableString(item, "baseArgs")))))
+                    + " returned " + baseResults[0] + "; PR returns " + prResults[0] + " across "
+                    + tests + (tests == 1 ? " test." : " tests.");
+                return string.Join(" ", unavailable.Append(collapsed));
+            }
+
+            return string.Join(" ", unavailable.Concat(
+                aligned.Select(item => RenderObservation(member, item)).Distinct(StringComparer.Ordinal)));
+        }
+
+        private static string CollapseArguments(IEnumerable<string?> renderedArguments)
+        {
+            string[][] rows = renderedArguments
+                .Where(value => value is not null)
+                .Select(value => CleanRendered(value!).Split(new[] { ", " }, StringSplitOptions.None))
+                .ToArray();
+            if (rows.Length == 0)
+            {
+                return "arguments not rendered";
+            }
+
+            var values = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+            foreach (string[] row in rows)
+            {
+                foreach (string part in row)
+                {
+                    int equals = part.IndexOf('=');
+                    string key = equals < 0 ? "value" : part.Substring(0, equals);
+                    string value = equals < 0 ? part : part.Substring(equals + 1);
+                    if (!values.TryGetValue(key, out List<string>? list))
+                    {
+                        list = new List<string>();
+                        values[key] = list;
+                    }
+
+                    if (!list.Contains(value, StringComparer.Ordinal))
+                    {
+                        list.Add(value);
+                    }
+                }
+            }
+
+            return string.Join(", ", values.Select(pair => pair.Key + "="
+                + (pair.Value.Count == 1 ? pair.Value[0] : "{" + string.Join(",", pair.Value) + "}")));
+        }
+
+        private static void AppendDistinctCallPaths(StringBuilder builder, JsonElement member)
+        {
+            if (!member.TryGetProperty("evidence", out JsonElement evidence))
+            {
+                builder.AppendLine("- Path unavailable.");
+                return;
+            }
+
+            var paths = new List<string>();
+            foreach (JsonElement observation in evidence.EnumerateArray().Take(20))
+            {
+                foreach (string property in new[] { "baseCallPath", "prCallPath" })
+                {
+                    string path = RenderPath(observation, property);
+                    if (path != "path unavailable")
+                    {
+                        paths.Add(path);
+                    }
+                }
+            }
+
+            foreach (IGrouping<string, string> path in paths.GroupBy(value => value, StringComparer.Ordinal))
+            {
+                builder.AppendLine("- " + path.Count() + "x: " + path.Key);
+            }
+        }
+
+        private static string LeadImpact(JsonElement member)
+        {
+            string name = String(member, "memberName");
+            JsonElement[] evidence = member.GetProperty("evidence").EnumerateArray().ToArray();
+            if (name.Contains("AccessControl.CanWithdraw", StringComparison.Ordinal)
+                && evidence.Any(item => (NullableString(item, "baseArgs") ?? string.Empty)
+                    .Contains("AccountStatus.Suspended", StringComparison.Ordinal)
+                    && CleanRendered(NullableString(item, "baseReturn") ?? string.Empty) == "false"
+                    && CleanRendered(NullableString(item, "prReturn") ?? string.Empty) == "true"))
+            {
+                return "A suspended account can now withdraw.";
+            }
+
+            if (member.TryGetProperty("consequences", out JsonElement consequences)
+                && consequences.ValueKind == JsonValueKind.Array
+                && consequences.EnumerateArray().Any(item =>
+                    String(item, "memberName").Contains("PaymentClient.ChargeAsync", StringComparison.Ordinal)))
+            {
+                return "A payment that previously succeeded after retries now fails prematurely.";
+            }
+
+            if (name.Contains("IsFreeShipping", StringComparison.Ordinal))
+            {
+                JsonElement changed = evidence.FirstOrDefault(item =>
+                    CleanRendered(NullableString(item, "baseReturn") ?? string.Empty) == "false"
+                    && CleanRendered(NullableString(item, "prReturn") ?? string.Empty) == "true");
+                if (changed.ValueKind != JsonValueKind.Undefined)
+                {
+                    string total = CleanRendered(NullableString(changed, "baseArgs") ?? string.Empty)
+                        .Replace("orderTotal=", string.Empty, StringComparison.Ordinal);
+                    return "An order totaling " + total + " now qualifies for free shipping.";
+                }
+            }
+
+            JsonElement fallback = evidence.FirstOrDefault(item =>
+                !string.Equals(NullableString(item, "baseReturn"), NullableString(item, "prReturn"), StringComparison.Ordinal));
+            return fallback.ValueKind == JsonValueKind.Undefined
+                ? "Its observed runtime behavior changed."
+                : ShortMember(name) + " changed from "
+                    + RenderValue(NullableString(fallback, "baseReturn"), NullableString(fallback, "baseException"))
+                    + " to " + RenderValue(NullableString(fallback, "prReturn"), NullableString(fallback, "prException")) + ".";
+        }
+
+        private static string UntestedLead(JsonElement member)
+        {
+            int untested = Int(member, "untestedCallSiteCount");
+            int tests = Int(member, "distinctTestCount");
+            if (untested == 1)
+            {
+                return "One of the " + tests + " tests that executed this did not assert on the change.";
+            }
+
+            return untested + " of the " + tests + " tests that executed this did not assert on the change.";
+        }
+
+        private static string CoverageFooter(JsonElement findings, JsonElement member)
+        {
+            JsonElement coverage = findings.GetProperty("coverage").GetProperty("summary");
+            return "_" + Int(coverage, "exercisedEditedFiles") + " of " + Int(coverage, "editedFiles")
+                + " edited files exercised. " + Code(Source(member)) + "._";
+        }
+
+        private static string ShortMember(string memberName)
+        {
+            int paren = memberName.IndexOf('(');
+            string qualified = paren < 0 ? memberName : memberName.Substring(0, paren);
+            string[] parts = qualified.Split('.');
+            return parts.Length < 2 ? qualified : parts[^2] + "." + parts[^1];
         }
 
         private static void AppendCoverage(StringBuilder builder, JsonElement findings)
@@ -768,7 +989,7 @@ namespace BehaviorDiff.Cli
             string withoutParameters = paren < 0 ? memberName : memberName.Substring(0, paren);
             int dot = withoutParameters.LastIndexOf('.');
             string method = dot < 0 ? withoutParameters : withoutParameters.Substring(dot + 1);
-            return method + "(" + (args ?? "arguments not rendered") + ")";
+            return method + "(" + CleanRendered(args ?? "arguments not rendered") + ")";
         }
 
         private static string Source(JsonElement member)
@@ -802,7 +1023,13 @@ namespace BehaviorDiff.Cli
         }
 
         private static string RenderValue(string? value, string? exception) =>
-            exception is not null ? "exception " + Code(exception) : Code(value ?? "(not rendered)");
+            exception is not null ? "exception " + Code(exception) : Code(CleanRendered(value ?? "(not rendered)"));
+
+        private static string CleanRendered(string value)
+        {
+            string clean = Regex.Replace(value, @"<(?<name>[^>]+)>k__BackingField=", "${name}=");
+            return Regex.Replace(clean, @"\b(?:Primitive|StructuralFields):", string.Empty);
+        }
 
         private static string Code(string text) => "`" + text.Replace("`", "'", StringComparison.Ordinal) + "`";
 

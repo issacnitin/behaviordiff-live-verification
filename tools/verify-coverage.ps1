@@ -65,7 +65,7 @@ if ($readme.interpretation -notmatch 'not observed' -or $readme.interpretation -
 if (($output -join "`n") -notmatch 'NOT EXERCISED\s+README.md.*no behavioral claim') {
     throw 'console output omitted the explicit zero-coverage row'
 }
-if ($unexpected.assertionReactionSummary -ne '2 tests executed this; 1 test had an assertion react.') {
+if ($unexpected.assertionReactionSummary -ne '5 tests executed this; 1 test had an assertion react.') {
     throw "unexpected assertion reaction summary: $($unexpected.assertionReactionSummary)"
 }
 if ($unexpected.evidence.Count -ne 2) {

@@ -49,7 +49,8 @@ foreach ($case in $cases) {
 
     $divergences = Get-Content (Join-Path $work 'divergence-set.json') -Raw | ConvertFrom-Json
     $frontier = Get-Content (Join-Path $work 'frontier-report.json') -Raw | ConvertFrom-Json
-    $findings = Get-Content (Join-Path $work 'findings.json') -Raw | ConvertFrom-Json
+    $findingsPath = Join-Path $work 'findings.json'
+    $findings = Get-Content $findingsPath -Raw | ConvertFrom-Json
 
     $editedDivergences = @($divergences.divergences | Where-Object filePath -eq $case.ChangedFile)
     if ($editedDivergences.Count -ne 0) {
@@ -115,6 +116,18 @@ foreach ($case in $cases) {
         throw "$($case.Change): canonical member rollup drifted: $($findings.summary | ConvertTo-Json -Compress)"
     }
 
+    $commentOutput = & dotnet run --project (Join-Path $PSScriptRoot 'CommentPreview/BehaviorDiff.CommentPreview.csproj') `
+        -c Release -- $findingsPath
+    if ($LASTEXITCODE -ne 0) { throw "$($case.Change): comment preview failed: $LASTEXITCODE" }
+    $comment = $commentOutput -join "`n"
+    $comment | Set-Content (Join-Path $work 'comment.md')
+    if ($comment -notmatch '^## BehaviorDiff: 1 behavior change outside this diff' `
+        -or $comment -notmatch '<details><summary>Why, and the evidence</summary>' `
+        -or $comment -match 'Unexpected means' `
+        -or $comment -match 'k__BackingField') {
+        throw "$($case.Change): concise comment contract drifted"
+    }
+
 
     if ($case.Change -eq 'retry') {
         $attemptFive = @($finding.evidence | Where-Object {
@@ -153,6 +166,14 @@ foreach ($case in $cases) {
     }
 
     if ($case.Change -eq 'enum') {
+        if ($finding.assertionReactionSummary -ne '3 tests executed this; 1 test had an assertion react.' `
+            -or $comment -notmatch 'AccessControl\.CanWithdraw.*changed, but this PR didn''t edit it' `
+            -or $comment -notmatch 'A suspended account can now withdraw' `
+            -or $comment -notmatch 'One of the 3 tests that executed this did not assert on the change' `
+            -or $comment -notmatch '_1 of 1 edited files exercised') {
+            throw 'enum: concise consequence-first comment drifted'
+        }
+
         $closedEvidence = @($finding.evidence | Where-Object {
             $_.testId -like '*Closed_account_cannot_withdraw' `
                 -and $_.baseArgs -eq 'status=Primitive:AccountStatus.Closed' `
@@ -183,6 +204,16 @@ foreach ($case in $cases) {
         if ($executingTests.Count -ne 3) {
             throw "enum: expected three tests to execute CanWithdraw, got $($executingTests.Count)"
         }
+    }
+
+    if ($case.Change -eq 'retry' `
+        -and $comment -notmatch 'A payment that previously succeeded after retries now fails prematurely') {
+        throw 'retry: concise comment lost the payment consequence lead'
+    }
+
+    if ($case.Change -eq 'config' `
+        -and $comment -notmatch 'An order totaling 40 now qualifies for free shipping') {
+        throw 'config: concise comment lost the free-shipping consequence lead'
     }
 
         Write-Host "PASS: edited file was exercised but left no divergence/frontier footprint" -ForegroundColor Green

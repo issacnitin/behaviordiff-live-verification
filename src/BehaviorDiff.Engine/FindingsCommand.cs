@@ -152,6 +152,11 @@ namespace BehaviorDiff.Engine
                 .Distinct(StringComparer.Ordinal)
                 .OrderBy(test => test, StringComparer.Ordinal)
                 .ToArray();
+            int executingTestCount = baseCallTree.Concat(prCallTree)
+                .Where(node => string.Equals(String(node, "methodFullName"), group.Key, StringComparison.Ordinal))
+                .Select(node => String(node, "testId"))
+                .Distinct(StringComparer.Ordinal)
+                .Count();
             int testsWithAssertionReaction = observingTests.Count(test =>
                 frontierByTest.TryGetValue(test, out JsonElement node) && !Bool(node, "untested"));
             FindingConsequence[] consequences = DescribeConsequences(
@@ -174,10 +179,10 @@ namespace BehaviorDiff.Engine
                     ? "Generated source is not present in the git diff, so path attribution cannot classify it as edited."
                     : null,
                 CallSiteCount = group.Count(),
-                DistinctTestCount = group.Select(node => String(node, "testId")).Distinct(StringComparer.Ordinal).Count(),
+                DistinctTestCount = executingTestCount,
                 ObservingTests = observingTests,
                 TestsWithAssertionReaction = testsWithAssertionReaction,
-                AssertionReactionSummary = AssertionReactionSummary(observingTests.Length, testsWithAssertionReaction),
+                AssertionReactionSummary = AssertionReactionSummary(executingTestCount, testsWithAssertionReaction),
                 ChangedFilesReachingMember = evidence.SelectMany(item => item.ChangedFilesOnPath)
                     .Distinct(StringComparer.Ordinal)
                     .OrderBy(path => path, StringComparer.Ordinal)
