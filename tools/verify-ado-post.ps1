@@ -188,8 +188,8 @@ try {
     $summary = $posts | Where-Object { $_.body -match 'behaviordiff:pr:314:summary' } | Select-Object -First 1
     $member = $posts | Where-Object { $_.body -match 'behaviordiff:pr:314:member:' } | Select-Object -First 1
     if (-not $summary -or -not $member) { throw 'summary/member marker missing from create payloads' }
-    if ($summary.body.IndexOf('Edited-code coverage') -gt $summary.body.IndexOf('UNEXPECTED')) { throw 'coverage did not precede finding count' }
-    if ($summary.body.IndexOf('UNEXPECTED') -gt $summary.body.IndexOf('EXPECTED')) { throw 'summary did not put UNEXPECTED first' }
+    if ($summary.body.IndexOf('Edited-code coverage') -gt $summary.body.IndexOf('UNASSERTED')) { throw 'coverage did not precede gap count' }
+    if ($summary.body.IndexOf('UNASSERTED') -gt $summary.body.IndexOf('EXPECTED')) { throw 'summary did not put unasserted gaps first' }
     $memberBody = $member.body | ConvertFrom-Json
     if ($memberBody.threadContext.filePath -ne '/samples/SampleApp/ShippingCalculator.cs') { throw 'wrong anchored file path' }
     if ($memberBody.threadContext.rightFileStart.line -ne 10) { throw 'wrong one-based source line' }

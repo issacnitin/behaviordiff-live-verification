@@ -207,12 +207,31 @@ namespace BehaviorDiff.Cli
             }
             else
             {
-                builder.AppendLine("**UNEXPECTED: " + unexpectedMembers + " member(s), across "
-                    + Int(summary, "unexpectedCallSites") + " call site(s).**");
-                builder.AppendLine();
-                builder.AppendLine("Unexpected means runtime behavior changed in a file the PR did not modify. That is the point of this analysis.");
-                builder.AppendLine();
-                AppendMembers(builder, findings, "unexpected", "Unexpected members");
+                JsonElement[] unexpected = findings.GetProperty("members").EnumerateArray()
+                    .Where(member => String(member, "attribution") == "unexpected")
+                    .ToArray();
+                JsonElement[] gaps = unexpected
+                    .Where(member => Int(member, "untestedCallSiteCount") > 0)
+                    .ToArray();
+                JsonElement[] covered = unexpected
+                    .Where(member => Int(member, "untestedCallSiteCount") == 0)
+                    .ToArray();
+                if (gaps.Length > 0)
+                {
+                    builder.AppendLine("**UNASSERTED: " + gaps.Length + " member(s), across "
+                        + gaps.Sum(member => Int(member, "callSiteCount")) + " call site(s).**");
+                    builder.AppendLine();
+                    AppendMembers(builder, findings, "unexpected", "Unasserted behavior gaps", hasUntested: true);
+                }
+
+                if (covered.Length > 0)
+                {
+                    builder.AppendLine("**TEST-COVERED: " + covered.Length + " member(s), across "
+                        + covered.Sum(member => Int(member, "callSiteCount")) + " call site(s).**");
+                    builder.AppendLine("Every executing test had an assertion react; these are recorded changes, not unasserted gaps.");
+                    builder.AppendLine();
+                    AppendMembers(builder, findings, "unexpected", "Test-covered changes", hasUntested: false);
+                }
             }
 
             builder.AppendLine();
@@ -251,7 +270,12 @@ namespace BehaviorDiff.Cli
             }
         }
 
-        private static void AppendMembers(StringBuilder builder, JsonElement findings, string attribution, string heading)
+        private static void AppendMembers(
+            StringBuilder builder,
+            JsonElement findings,
+            string attribution,
+            string heading,
+            bool? hasUntested = null)
         {
             if (!findings.TryGetProperty("members", out JsonElement members))
             {
@@ -259,7 +283,9 @@ namespace BehaviorDiff.Cli
             }
 
             JsonElement[] selected = members.EnumerateArray()
-                .Where(member => String(member, "attribution") == attribution)
+                .Where(member => String(member, "attribution") == attribution
+                    && (hasUntested is null
+                        || (Int(member, "untestedCallSiteCount") > 0) == hasUntested.Value))
                 .ToArray();
             if (selected.Length == 0)
             {

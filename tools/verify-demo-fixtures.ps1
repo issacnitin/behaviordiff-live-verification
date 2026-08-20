@@ -134,9 +134,9 @@ foreach ($case in $cases) {
     if ($LASTEXITCODE -ne 0) { throw "$($case.Change): comment preview failed: $LASTEXITCODE" }
     $comment = $commentOutput -join "`n"
     $comment | Set-Content (Join-Path $work 'comment.md')
-    $changeWord = if ($case.UnexpectedMembers -eq 1) { 'change' } else { 'changes' }
+    $gapWord = if ($case.UnexpectedMembers -eq 1) { 'gap' } else { 'gaps' }
     $expectedHeading = '^## BehaviorDiff: {0} behavior {1} outside this diff' -f `
-        $case.UnexpectedMembers, $changeWord
+        $case.UnexpectedMembers, $gapWord
     if ($comment -notmatch $expectedHeading `
         -or $comment -notmatch '<details><summary>Why, and the evidence</summary>' `
         -or $comment -match 'Unexpected means' `

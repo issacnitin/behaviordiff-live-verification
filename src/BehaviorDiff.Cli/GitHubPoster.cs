@@ -96,7 +96,8 @@ namespace BehaviorDiff.Cli
                 && findings.TryGetProperty("members", out JsonElement members))
             {
                 foreach (JsonElement member in members.EnumerateArray()
-                    .Where(member => String(member, "attribution") == "unexpected"))
+                    .Where(member => String(member, "attribution") == "unexpected"
+                        && Int(member, "untestedCallSiteCount") > 0))
                 {
                     CauseAnchor? anchor = FindCauseAnchor(patches);
                     if (anchor is null)
@@ -228,6 +229,11 @@ namespace BehaviorDiff.Cli
             foreach (JsonElement member in unexpected)
             {
                 string memberName = String(member, "memberName");
+                if (Int(member, "untestedCallSiteCount") == 0)
+                {
+                    continue;
+                }
+
                 try
                 {
                     JsonElement[] related = unexpected
@@ -552,16 +558,33 @@ namespace BehaviorDiff.Cli
                 JsonElement[] unexpected = findings.GetProperty("members").EnumerateArray()
                     .Where(member => String(member, "attribution") == "unexpected")
                     .ToArray();
-                JsonElement lead = unexpected[0];
-                builder.AppendLine("## BehaviorDiff: " + unexpectedMembers + " behavior "
-                    + (unexpectedMembers == 1 ? "change" : "changes") + " outside this diff");
+                JsonElement[] gaps = unexpected
+                    .Where(member => Int(member, "untestedCallSiteCount") > 0)
+                    .ToArray();
+                JsonElement[] covered = unexpected
+                    .Where(member => Int(member, "untestedCallSiteCount") == 0)
+                    .ToArray();
+                JsonElement lead = gaps.FirstOrDefault();
+                if (lead.ValueKind == JsonValueKind.Undefined)
+                {
+                    lead = covered[0];
+                }
+
+                builder.AppendLine(gaps.Length > 0
+                    ? "## BehaviorDiff: " + gaps.Length + " behavior "
+                        + (gaps.Length == 1 ? "gap" : "gaps") + " outside this diff"
+                    : "## BehaviorDiff: " + covered.Length + " test-covered behavior "
+                        + (covered.Length == 1 ? "change" : "changes") + " outside this diff");
                 builder.AppendLine();
                 builder.AppendLine("**" + Code(ShortMember(String(lead, "memberName")))
                     + " changed, but this PR didn't edit it.**");
-                builder.AppendLine(LeadImpact(lead) + " " + UntestedLead(lead));
+                builder.AppendLine(Int(lead, "untestedCallSiteCount") > 0
+                    ? LeadImpact(lead) + " " + UntestedLead(lead)
+                    : "Every test that executed this member had an assertion react; this is a test-covered "
+                        + "change, not an unasserted behavior gap.");
                 builder.AppendLine();
                 builder.AppendLine("<details><summary>Why, and the evidence</summary>");
-                foreach (JsonElement member in unexpected)
+                foreach (JsonElement member in gaps.Concat(covered))
                 {
                     AppendConciseMember(
                         builder,
@@ -890,13 +913,21 @@ namespace BehaviorDiff.Cli
         {
             JsonElement summary = findings.GetProperty("summary");
             bool clean = String(findings, "verdict") == "clean";
+            JsonElement[] unexpected = findings.TryGetProperty("members", out JsonElement findingMembers)
+                ? findingMembers.EnumerateArray()
+                    .Where(item => String(item, "attribution") == "unexpected")
+                    .ToArray()
+                : Array.Empty<JsonElement>();
+            int gaps = unexpected.Count(item => Int(item, "untestedCallSiteCount") > 0);
+            int covered = unexpected.Length - gaps;
             var builder = new StringBuilder();
             builder.AppendLine("## BehaviorDiff runtime analysis");
             builder.AppendLine();
             builder.AppendLine(clean
                 ? "**No unexpected behavior changes were found in the observed execution.**"
-                : "**UNEXPECTED: " + Int(summary, "unexpectedMembers") + " member(s), across "
-                    + Int(summary, "unexpectedCallSites") + " call site(s).**");
+                : "**" + gaps + " unasserted behavior gap(s); " + covered
+                    + " test-covered change(s), across " + Int(summary, "unexpectedCallSites")
+                    + " call site(s).**");
             builder.AppendLine();
             builder.AppendLine("The complete deterministic evidence exceeded GitHub's comment limit. Inspect findings.json "
                 + "in the workflow artifact. " + (clean

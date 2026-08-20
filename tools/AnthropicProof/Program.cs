@@ -284,8 +284,8 @@ Assert(!withoutKey.Contains("Optional model explanation", StringComparison.Ordin
 Assert(withKey.Contains("Optional model explanation", StringComparison.Ordinal), "key-enabled comment omitted accepted model output");
 Assert(withKey.Contains("grounded", StringComparison.Ordinal), "model output is not labeled as grounded");
 Assert(!withKey.Contains("422", StringComparison.Ordinal), "comment leaked raw GitHub 422 details");
-Assert(withoutKey.StartsWith("## BehaviorDiff: 1 behavior change outside this diff", StringComparison.Ordinal),
-    "comment does not lead with the outside-diff change count");
+Assert(withoutKey.StartsWith("## BehaviorDiff: 1 behavior gap outside this diff", StringComparison.Ordinal),
+    "comment does not lead with the outside-diff behavior gap count");
 Assert(withoutKey.Contains("**`ShippingCalculator.IsFreeShipping` changed, but this PR didn't edit it.**", StringComparison.Ordinal),
     "comment does not lead with the unedited member");
 Assert(withoutKey.Contains("<details><summary>Why, and the evidence</summary>", StringComparison.Ordinal),
@@ -294,6 +294,31 @@ Assert(withoutKey.Contains("**Distinct call paths**", StringComparison.Ordinal),
 Assert(!withoutKey.Contains("Unexpected means", StringComparison.Ordinal), "obsolete unexpected explainer remains");
 Assert(!withoutKey.Contains("k__BackingField", StringComparison.Ordinal), "comment leaked compiler backing-field syntax");
 Assert(withoutKey.Contains("_1 of 2 edited files exercised.", StringComparison.Ordinal), "coverage/source footer is missing");
+
+JsonObject fullyAsserted = JsonNode.Parse(File.ReadAllText(args[0]))?.AsObject()
+    ?? throw new InvalidOperationException("could not create fully asserted proof");
+JsonObject fullyAssertedMember = fullyAsserted["members"]?[0]?.AsObject()
+    ?? throw new InvalidOperationException("fully asserted proof has no member");
+fullyAssertedMember["untestedCallSiteCount"] = 0;
+fullyAssertedMember["testsWithAssertionReaction"] = fullyAssertedMember["distinctTestCount"]?.GetValue<int>() ?? 0;
+fullyAssertedMember["assertionReactionSummary"] = "5 tests executed this; 5 tests had an assertion react.";
+using JsonDocument fullyAssertedDocument = JsonDocument.Parse(fullyAsserted.ToJsonString());
+string fullyAssertedComment = GitHubPoster.RenderSummary(
+    fullyAssertedDocument.RootElement,
+    marker,
+    Array.Empty<string>());
+Assert(fullyAssertedComment.StartsWith(
+    "## BehaviorDiff: 1 test-covered behavior change outside this diff",
+    StringComparison.Ordinal),
+    "fully asserted change was not labeled test-covered");
+Assert(fullyAssertedComment.Contains(
+    "this is a test-covered change, not an unasserted behavior gap",
+    StringComparison.Ordinal),
+    "fully asserted change was framed as an unasserted gap");
+Assert(!fullyAssertedComment.Contains(
+    "An order totaling 40 now qualifies for free shipping",
+    StringComparison.Ordinal),
+    "fully asserted change retained the breaking-impact lead");
 
 JsonObject oversized = JsonNode.Parse(File.ReadAllText(args[0]))?.AsObject()
     ?? throw new InvalidOperationException("could not create oversized findings proof");
