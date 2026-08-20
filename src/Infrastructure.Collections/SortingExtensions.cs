@@ -8,11 +8,6 @@ namespace Infrastructure.Collections
     {
         public static List<T> ByPriority<T>(
             this IEnumerable<T> src,
-            Func<T, int> key)
-        {
-            var list = src.ToList();
-            list.Sort((a, b) => key(a).CompareTo(key(b)));
-            return list;
-        }
+            Func<T, int> key) => src.OrderBy(key).ToList();
     }
 }
