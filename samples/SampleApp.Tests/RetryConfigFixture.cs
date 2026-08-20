@@ -4,9 +4,9 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
 
-namespace SampleApp.Diagnostics
+namespace PaymentFixture
 {
-    public sealed class RetryConfigFixture : IReadOnlyDictionary<string, string>
+    internal sealed class RetryConfigFixture : IReadOnlyDictionary<string, string>
     {
         private const string InheritedMaxAttempts = "10";
         private readonly IReadOnlyDictionary<string, string> _values;
