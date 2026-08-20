@@ -596,6 +596,7 @@ namespace BehaviorDiff.Cli
             }
 
             string include = string.Join(",", namespacePrefixes);
+            string? exclude = Environment.GetEnvironmentVariable("BEHAVIORDIFF_EXCLUDE_NAMESPACES");
             int wovenAssemblies = 0;
             var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -630,6 +631,12 @@ namespace BehaviorDiff.Cli
                         "--include",
                         include,
                     };
+                    if (!string.IsNullOrWhiteSpace(exclude))
+                    {
+                        arguments.Add("--exclude");
+                        arguments.Add(exclude!);
+                    }
+
                     if (string.Equals(Path.GetFileName(assembly), testAssembly, StringComparison.OrdinalIgnoreCase))
                     {
                         arguments.Add("--test-assembly");

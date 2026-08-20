@@ -19,6 +19,7 @@ $required = @{
     'posting command' = 'post --provider=azuredevops'
     'explicit OAuth token mapping' = 'SYSTEM_ACCESSTOKEN: $(System.AccessToken)'
     'warn-only default' = 'behaviorDiffGate: warn-only'
+    'repository-owned namespace exclusions' = 'behaviorDiffExcludeNamespaces: SampleApp.Diagnostics,SampleApp.Persistence'
     'always-run cleanup/posting' = 'condition: always()'
     'trace cleanup' = 'Remove-Item $work -Recurse -Force'
     'hosted measurement output' = 'HOSTED MEASUREMENT'
@@ -36,6 +37,9 @@ $program = Get-Content (Join-Path $repo 'src/BehaviorDiff.Cli/Program.cs') -Raw
 if ((-not $program.Contains('RunTests("base_run3"', [StringComparison]::Ordinal)) -or
     (-not $program.Contains('Base3 = base3', [StringComparison]::Ordinal))) {
     throw 'the generic CLI is not supplying the third base run to the engine'
+}
+if (-not $program.Contains('arguments.Add("--exclude")', [StringComparison]::Ordinal)) {
+    throw 'the generic CLI is not forwarding repository-owned namespace exclusions to the weaver'
 }
 
 Write-Host 'PASS: pipeline has full-history refs, canonical output, always-post, warn default, measurements, and cleanup' -ForegroundColor Green
