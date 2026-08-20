@@ -28,12 +28,11 @@ The finding that matters is the one in a file the pull request never touched.
 
 **Primary — stable-sort regression.** The only edited file is the general-purpose helper
 `src/Infrastructure.Collections/SortingExtensions.cs`, in a different project and namespace from pricing.
-It replaces stable `OrderBy` with unstable `List.Sort` to avoid a LINQ allocation. Infrastructure collections
+The PR replaces unstable `List.Sort` with stable `OrderBy`. Infrastructure collections
 are deliberately excluded by repository tracing policy, so the edited file contributes zero traced members
 or calls. In unedited `src/Commerce.Pricing`, two matching discount rules share priority 10. The stable sort
-keeps `SEASONAL_15` ahead of `CLEARANCE_40`; the refactor deterministically reverses them, changing checkout
-from 85 to 60. The applied-discount test stays green, the list-price ceiling stays green precisely because the
-wrong discount is larger, and the tie-winner test catches the regression.
+restores `SEASONAL_15` ahead of `CLEARANCE_40`, changing checkout from 60 to 85. The applied-discount test and
+list-price ceiling stay green, while the compatibility test for the current clearance-first behavior reacts.
 
 ```powershell
 pwsh -File tools/verify-diff.ps1 -Mutate -Change sort
@@ -71,7 +70,7 @@ pwsh -File tools/verify-diff.ps1 -Mutate -Change config
 All three demo modes enforce the same constraints in one proof: exactly one edited file has no
 divergence/frontier footprint, collapse is above `1x`, and the headline has an `untested: True`
 observation. The sort mode additionally proves that the edited file has zero traced members and calls, and
-runs the mutated tie-winner test in five fresh processes to confirm the swap is deterministic.
+runs the mutated tie-winner test in five fresh processes to confirm stable selection is deterministic.
 
 ```powershell
 pwsh -File tools/verify-demo-fixtures.ps1

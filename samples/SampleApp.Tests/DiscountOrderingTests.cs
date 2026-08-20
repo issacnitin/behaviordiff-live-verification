@@ -28,13 +28,13 @@ namespace SampleApp.Tests
         }
 
         [Fact]
-        public void Seasonal_discount_wins_ties()
+        public void Clearance_discount_wins_current_ties()
         {
             var discounts = new DiscountEngine();
 
             string selected = discounts.SelectDiscount(100m);
 
-            Assert.Equal("SEASONAL_15", selected);
+            Assert.Equal("CLEARANCE_40", selected);
         }
     }
 }

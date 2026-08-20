@@ -72,18 +72,12 @@ if (-not $SkipPrRebuild) {
         if ($Change -eq 'sort') {
             $target = Join-Path $prTree 'src/Infrastructure.Collections/SortingExtensions.cs'
             $text = Get-Content $target -Raw
-            $mutated = $text -replace '(?s)public static List<T> ByPriority<T>\(\s*this IEnumerable<T> src,\s*Func<T, int> key\) => src\.OrderBy\(key\)\.ToList\(\);', @'
+            $mutated = $text -replace '(?s)public static List<T> ByPriority<T>\(\s*this IEnumerable<T> src,\s*Func<T, int> key\)\s*\{\s*var list = src\.ToList\(\);\s*list\.Sort\(\(a, b\) => key\(a\)\.CompareTo\(key\(b\)\)\);\s*return list;\s*\}', @'
 public static List<T> ByPriority<T>(
             this IEnumerable<T> src,
-            Func<T, int> key)
-        {
-            var list = source.ToList();
-            list.Sort((a, b) => key(a).CompareTo(key(b)));
-            return list;
-        }
+            Func<T, int> key) => src.OrderBy(key).ToList();
 '@
-            $mutated = $mutated -replace 'var list = source\.ToList\(\);', 'var list = src.ToList();'
-            $label = 'SortingExtensions avoids LINQ allocation in hot sort path'
+            $label = 'SortingExtensions restores stable ordering for equal-priority items'
         }
         elseif ($Change -eq 'retry') {
             $target = Join-Path $prTree 'samples/SampleApp/ConfigParser.cs'

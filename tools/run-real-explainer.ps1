@@ -35,8 +35,8 @@ $work = Join-Path ([IO.Path]::GetTempPath()) "behaviordiff-live-$runId"
 $case = switch ($Change) {
     'sort' { @{
         File = 'src/Infrastructure.Collections/SortingExtensions.cs'
-        Base = 'Func<T, int> key) => src.OrderBy(key).ToList();'
-        Pr = 'var list = src.ToList();'
+        Base = 'var list = src.ToList();'
+        Pr = 'Func<T, int> key) => src.OrderBy(key).ToList();'
     } }
     'retry' { @{
         File = 'samples/SampleApp/ConfigParser.cs'

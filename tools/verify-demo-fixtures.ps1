@@ -189,8 +189,8 @@ foreach ($case in $cases) {
     if ($case.Change -eq 'sort') {
         if ($finding.assertionReactionSummary -ne '3 tests executed this; 1 test had an assertion react.' `
             -or $comment -notmatch 'DiscountEngine\.SelectDiscount.*changed, but this PR didn''t edit it' `
-            -or $comment -notmatch 'SelectDiscount returned "SEASONAL_15", now returns "CLEARANCE_40"' `
-            -or $comment -notmatch 'CheckoutTotals\.Compute returned 85, now returns 60' `
+            -or $comment -notmatch 'SelectDiscount returned "CLEARANCE_40", now returns "SEASONAL_15"' `
+            -or $comment -notmatch 'CheckoutTotals\.Compute returned 60, now returns 85' `
             -or $comment -notmatch '2 of the 3 tests that executed this did not assert on the change' `
             -or $comment -notmatch '_0 of 1 edited files exercised') {
             throw 'sort: concise consequence-first comment drifted'
@@ -199,8 +199,8 @@ foreach ($case in $cases) {
         $selections = @($finding.evidence | Where-Object {
             $_.baseArgs -eq 'listPrice=Primitive:100' `
                 -and $_.prArgs -eq 'listPrice=Primitive:100' `
-                -and $_.baseReturn -eq 'Primitive:"SEASONAL_15"' `
-                -and $_.prReturn -eq 'Primitive:"CLEARANCE_40"'
+                -and $_.baseReturn -eq 'Primitive:"CLEARANCE_40"' `
+                -and $_.prReturn -eq 'Primitive:"SEASONAL_15"'
         })
         if ($selections.Count -ne 3) {
             throw 'sort: equal-priority selection did not swap deterministically in all three tests'
@@ -209,18 +209,18 @@ foreach ($case in $cases) {
         $partialOracle = @($finding.consequences | Where-Object {
             $_.memberName -eq 'Commerce.Pricing.CheckoutTotals.Compute(System.Decimal)' `
                 -and $_.evidence.testId -like '*Total_is_never_above_list_price' `
-                -and $_.evidence.baseReturn -eq 'Primitive:85.00' `
-                -and $_.evidence.prReturn -eq 'Primitive:60.00' `
+                -and $_.evidence.baseReturn -eq 'Primitive:60.00' `
+                -and $_.evidence.prReturn -eq 'Primitive:85.00' `
                 -and $_.evidence.assertionReacted -eq $false
         })
         if ($partialOracle.Count -ne 1) {
-            throw 'sort: list-price partial oracle did not retain the larger wrong-discount evidence'
+            throw 'sort: list-price partial oracle did not retain the changed-discount evidence'
         }
 
         $caughtOracle = @($finding.evidence | Where-Object {
-            $_.testId -like '*Seasonal_discount_wins_ties' `
-                -and $_.baseReturn -eq 'Primitive:"SEASONAL_15"' `
-                -and $_.prReturn -eq 'Primitive:"CLEARANCE_40"' `
+            $_.testId -like '*Clearance_discount_wins_current_ties' `
+                -and $_.baseReturn -eq 'Primitive:"CLEARANCE_40"' `
+                -and $_.prReturn -eq 'Primitive:"SEASONAL_15"' `
                 -and $_.assertionReacted -eq $true
         })
         if ($caughtOracle.Count -ne 1) {
@@ -239,10 +239,10 @@ foreach ($case in $cases) {
         $testProject = Join-Path $prTree 'samples/SampleApp.Tests/SampleApp.Tests.csproj'
         foreach ($repeat in 1..5) {
             $output = & dotnet test $testProject -c Release --no-build --nologo `
-                --filter 'FullyQualifiedName~Seasonal_discount_wins_ties' 2>&1
+                --filter 'FullyQualifiedName~Clearance_discount_wins_current_ties' 2>&1
             if ($LASTEXITCODE -ne 1 `
-                -or ($output -join "`n") -notmatch 'CLEARANCE_40') {
-                throw "sort: fresh PR test process $repeat did not deterministically select CLEARANCE_40"
+                -or ($output -join "`n") -notmatch 'SEASONAL_15') {
+                throw "sort: fresh PR test process $repeat did not deterministically select SEASONAL_15"
             }
         }
     }

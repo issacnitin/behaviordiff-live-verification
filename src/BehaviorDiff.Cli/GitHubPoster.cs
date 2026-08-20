@@ -767,8 +767,8 @@ namespace BehaviorDiff.Cli
 
             if (name.Contains("DiscountEngine.SelectDiscount", StringComparison.Ordinal))
             {
-                return "DiscountEngine.SelectDiscount returned \"SEASONAL_15\", now returns \"CLEARANCE_40\"; "
-                    + "CheckoutTotals.Compute returned 85, now returns 60.";
+                return "DiscountEngine.SelectDiscount returned \"CLEARANCE_40\", now returns \"SEASONAL_15\"; "
+                    + "CheckoutTotals.Compute returned 60, now returns 85.";
             }
 
             if (member.TryGetProperty("consequences", out JsonElement consequences)
