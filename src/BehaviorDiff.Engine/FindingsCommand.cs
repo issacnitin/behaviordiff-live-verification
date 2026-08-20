@@ -154,6 +154,14 @@ namespace BehaviorDiff.Engine
                 .ToArray();
             int testsWithAssertionReaction = observingTests.Count(test =>
                 frontierByTest.TryGetValue(test, out JsonElement node) && !Bool(node, "untested"));
+            FindingConsequence[] consequences = DescribeConsequences(
+                group.Key,
+                evidence,
+                divergences,
+                frontierByTest,
+                baseCallTree,
+                prCallTree,
+                changedFiles);
 
             return new FindingMember
             {
@@ -180,7 +188,77 @@ namespace BehaviorDiff.Engine
                 DescendantsCompared = group.Sum(node => Int(node, "descendantKeysCompared")),
                 UntestedCallSiteCount = group.Count(node => Bool(node, "untested")),
                 Evidence = evidence,
+                Consequences = consequences,
             };
+        }
+
+        private static FindingConsequence[] DescribeConsequences(
+            string frontierMember,
+            IReadOnlyList<FindingEvidence> evidence,
+            IReadOnlyList<JsonElement> divergences,
+            IReadOnlyDictionary<string, JsonElement> frontierByTest,
+            IReadOnlyList<JsonElement> baseCallTree,
+            IReadOnlyList<JsonElement> prCallTree,
+            IReadOnlySet<string> changedFiles)
+        {
+            var candidates = evidence
+                .Select(item => new
+                {
+                    item.TestId,
+                    MemberName = OutermostProductAncestor(item.BaseCallPath, frontierMember)
+                        ?? OutermostProductAncestor(item.PrCallPath, frontierMember),
+                })
+                .Where(item => item.MemberName is not null)
+                .DistinctBy(item => item.TestId + "|" + item.MemberName, StringComparer.Ordinal)
+                .ToArray();
+
+            var consequences = new List<FindingConsequence>();
+            foreach (var candidate in candidates)
+            {
+                JsonElement divergence = divergences.FirstOrDefault(item =>
+                    string.Equals(String(item, "testId"), candidate.TestId, StringComparison.Ordinal)
+                    && string.Equals(String(item, "methodFullName"), candidate.MemberName, StringComparison.Ordinal)
+                    && (NullableInt(item, "ordinal") ?? -1) >= 0
+                    && (!string.Equals(
+                            NullableString(item, "baseReturnRendered"),
+                            NullableString(item, "prReturnRendered"),
+                            StringComparison.Ordinal)
+                        || !string.Equals(
+                            NullableString(item, "baseExceptionType"),
+                            NullableString(item, "prExceptionType"),
+                            StringComparison.Ordinal)));
+                if (divergence.ValueKind == JsonValueKind.Undefined)
+                {
+                    continue;
+                }
+
+                consequences.Add(new FindingConsequence
+                {
+                    MemberName = candidate.MemberName!,
+                    Evidence = DescribeEvidence(
+                        divergence,
+                        frontierByTest,
+                        baseCallTree,
+                        prCallTree,
+                        changedFiles),
+                });
+            }
+
+            return consequences.ToArray();
+        }
+
+        private static string? OutermostProductAncestor(
+            IReadOnlyList<FindingPathNode>? path,
+            string frontierMember)
+        {
+            if (path is null)
+            {
+                return null;
+            }
+
+            return path.FirstOrDefault(node =>
+                !node.IsHarness
+                && !string.Equals(node.MemberName, frontierMember, StringComparison.Ordinal))?.MemberName;
         }
 
         private static FindingEvidence DescribeEvidence(
@@ -369,6 +447,13 @@ namespace BehaviorDiff.Engine
             public int DescendantsCompared { get; init; }
             public int UntestedCallSiteCount { get; init; }
             public FindingEvidence[] Evidence { get; init; } = Array.Empty<FindingEvidence>();
+            public FindingConsequence[] Consequences { get; init; } = Array.Empty<FindingConsequence>();
+        }
+
+        private sealed class FindingConsequence
+        {
+            public string MemberName { get; init; } = string.Empty;
+            public FindingEvidence Evidence { get; init; } = new();
         }
 
         private sealed class FindingEvidence

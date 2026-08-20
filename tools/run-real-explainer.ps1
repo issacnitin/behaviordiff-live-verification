@@ -7,10 +7,23 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-if ([string]::IsNullOrWhiteSpace($env:ANTHROPIC_API_KEY)) {
-    throw 'ANTHROPIC_API_KEY is not set. Enter it directly in this terminal environment, then rerun.'
-}
 $apiKey = $env:ANTHROPIC_API_KEY
+if ([string]::IsNullOrWhiteSpace($apiKey)) {
+    $keyFile = Join-Path $HOME '.behaviordiff/anthropic.key'
+    if (-not (Test-Path $keyFile)) {
+        throw 'ANTHROPIC_API_KEY is not set and ~/.behaviordiff/anthropic.key does not exist.'
+    }
+
+    $secureKey = ConvertTo-SecureString (Get-Content $keyFile -Raw)
+    $keyPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureKey)
+    try {
+        $apiKey = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($keyPointer)
+    }
+    finally {
+        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($keyPointer)
+        $secureKey.Dispose()
+    }
+}
 Remove-Item Env:ANTHROPIC_API_KEY
 
 $repo = Split-Path -Parent $PSScriptRoot
@@ -19,9 +32,9 @@ $prTree = Join-Path ([IO.Path]::GetTempPath()) "behaviordiff-live-pr-$runId"
 $work = Join-Path ([IO.Path]::GetTempPath()) "behaviordiff-live-$runId"
 $case = switch ($Change) {
     'retry' { @{
-        File = 'samples/SampleApp/RetryPolicyParser.cs'
-        Base = 'DefaultMaxAttempts = 3'
-        Pr = 'DefaultMaxAttempts = 2'
+        File = 'samples/SampleApp/ConfigParser.cs'
+        Base = 'RetrySettings.MaxAttempts = int.Parse(raw["max_attempts"], CultureInfo.InvariantCulture);'
+        Pr = 'RetrySettings.MaxAttempts = raw.TryGetValue("max_attempts", out string? value)'
     } }
     'permission' { @{
         File = 'samples/SampleApp/PermissionDefaultsParser.cs'
@@ -47,14 +60,19 @@ try {
     }
 
     $patch = Join-Path $work "$Change.patch"
-    $baseLine = ($baseText -split "`r?`n" | Where-Object { $_ -match [regex]::Escape($case.Base) } | Select-Object -First 1).Trim()
-    $prLine = ($prText -split "`r?`n" | Where-Object { $_ -match [regex]::Escape($case.Pr) } | Select-Object -First 1).Trim()
+    $diff = @(& git diff --no-index --no-prefix --unified=3 -- `
+        (Join-Path $repo $case.File) (Join-Path $prTree $case.File) 2>$null)
+    if ($LASTEXITCODE -ne 1) { throw "$Change expected git diff --no-index to report one changed file" }
+    $hunkStart = 0
+    while ($hunkStart -lt $diff.Count -and -not $diff[$hunkStart].StartsWith('@@', [StringComparison]::Ordinal)) {
+        $hunkStart++
+    }
+    if ($hunkStart -eq $diff.Count) { throw "$Change mutation did not produce a unified diff hunk" }
+    $hunk = $diff[$hunkStart..($diff.Count - 1)]
     @(
         "--- a/$($case.File)"
         "+++ b/$($case.File)"
-        '@@ demo default @@'
-        "-$baseLine"
-        "+$prLine"
+        $hunk
     ) | Set-Content $patch
 
     $liveOutput = Join-Path $work 'live'

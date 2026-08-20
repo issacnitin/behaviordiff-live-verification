@@ -630,6 +630,18 @@ namespace BehaviorDiff.Cli
                 }
             }
 
+            if (member.TryGetProperty("consequences", out JsonElement consequences)
+                && consequences.ValueKind == JsonValueKind.Array
+                && consequences.GetArrayLength() > 0)
+            {
+                builder.AppendLine();
+                builder.AppendLine("**Downstream consequences**");
+                foreach (JsonElement consequence in consequences.EnumerateArray().Take(3))
+                {
+                    builder.AppendLine("- " + RenderConsequence(consequence));
+                }
+            }
+
             builder.AppendLine();
             builder.AppendLine("**Tests and assertions**");
             builder.AppendLine("- **" + Escape(String(member, "assertionReactionSummary")) + "**");
@@ -707,6 +719,20 @@ namespace BehaviorDiff.Cli
                 : "base " + Code(baseInvocation) + ", PR " + Code(prInvocation);
             return Code(String(observation, "testId")) + ": " + invocation + " returned "
                 + baseResult + "; PR returns " + prResult + ".";
+        }
+
+        private static string RenderConsequence(JsonElement consequence)
+        {
+            JsonElement observation = consequence.GetProperty("evidence");
+            string memberName = String(consequence, "memberName");
+            string baseResult = RenderValue(
+                NullableString(observation, "baseReturn"),
+                NullableString(observation, "baseException"));
+            string prResult = RenderValue(
+                NullableString(observation, "prReturn"),
+                NullableString(observation, "prException"));
+            return Code(String(observation, "testId")) + ": " + Code(memberName)
+                + " returned " + baseResult + "; PR returns " + prResult + ".";
         }
 
         private static void AppendCallPaths(StringBuilder builder, JsonElement observation)

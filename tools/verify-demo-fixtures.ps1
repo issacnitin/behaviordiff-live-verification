@@ -3,13 +3,13 @@ $ErrorActionPreference = 'Stop'
 $cases = @(
     @{
         Change = 'retry'
-        ChangedFile = 'samples/SampleApp/RetryPolicyParser.cs'
-        Headline = 'SampleApp.RetryEvaluator.ShouldRetry(System.Int32)'
-        DivergedKeys = 3
-        FrontierNodes = 1
-        ChangedCallSites = 1
-        ChangedCalls = 2
-        HeadlineCallSites = 1
+        ChangedFile = 'samples/SampleApp/ConfigParser.cs'
+        Headline = 'SampleApp.RetryPolicy.ShouldRetry(System.Int32,System.Int32)'
+        DivergedKeys = 5
+        FrontierNodes = 2
+        ChangedCallSites = 2
+        ChangedCalls = 4
+        HeadlineCallSites = 2
         UntestedCallSites = 1
     }
     @{
@@ -54,6 +54,11 @@ foreach ($case in $cases) {
     $editedDivergences = @($divergences.divergences | Where-Object filePath -eq $case.ChangedFile)
     if ($editedDivergences.Count -ne 0) {
         throw "$($case.Change): edited file produced $($editedDivergences.Count) divergence(s)"
+    }
+
+    $changedFiles = @($frontier.attributionInputs.changedFiles)
+    if ($changedFiles.Count -ne 1 -or $changedFiles[0] -ne $case.ChangedFile) {
+        throw "$($case.Change): expected exactly one edited file, got $($changedFiles -join ', ')"
     }
 
     $coverage = $findings.coverage.files | Where-Object filePath -eq $case.ChangedFile
@@ -108,6 +113,43 @@ foreach ($case in $cases) {
         -or $findings.summary.expectedMembers -ne 0 `
         -or @($findings.members | Where-Object attribution -eq 'unexpected').Count -ne 1) {
         throw "$($case.Change): canonical member rollup drifted: $($findings.summary | ConvertTo-Json -Compress)"
+    }
+
+
+    if ($case.Change -eq 'retry') {
+        $attemptFive = @($finding.evidence | Where-Object {
+            $_.baseArgs -eq 'statusCode=Primitive:503, attempt=Primitive:5' `
+                -and $_.prArgs -eq 'statusCode=Primitive:503, attempt=Primitive:5' `
+                -and $_.baseReturn -eq 'Primitive:true' `
+                -and $_.prReturn -eq 'Primitive:false'
+        })
+        if ($attemptFive.Count -ne 2 `
+            -or @($attemptFive | Select-Object -ExpandProperty testId -Unique).Count -ne 2) {
+            throw 'retry: ShouldRetry(503, 5) did not change true -> false in both payment tests'
+        }
+
+        $paymentConsequence = @($divergences.divergences | Where-Object {
+            $_.testId -like '*Payment_survives_extended_outage' `
+                -and $_.methodFullName -eq 'SampleApp.PaymentClient.ChargeAsync(System.Decimal)' `
+                -and $_.baseReturnRendered -match 'AttemptCount>k__BackingField=7' `
+                -and $_.baseReturnRendered -match 'Succeeded>k__BackingField=true' `
+                -and $_.prReturnRendered -match 'AttemptCount>k__BackingField=3' `
+                -and $_.prReturnRendered -match 'Succeeded>k__BackingField=false'
+        })
+        if ($paymentConsequence.Count -ne 1) {
+            throw 'retry: payment outcome did not change from success on attempt 7 to failure on attempt 3'
+        }
+
+        $canonicalConsequence = @($finding.consequences | Where-Object {
+            $_.memberName -eq 'SampleApp.PaymentClient.ChargeAsync(System.Decimal)' `
+                -and $_.evidence.baseReturn -match 'AttemptCount>k__BackingField=7' `
+                -and $_.evidence.baseReturn -match 'Succeeded>k__BackingField=true' `
+                -and $_.evidence.prReturn -match 'AttemptCount>k__BackingField=3' `
+                -and $_.evidence.prReturn -match 'Succeeded>k__BackingField=false'
+        })
+        if ($canonicalConsequence.Count -ne 1) {
+            throw 'retry: canonical findings lost the downstream payment consequence'
+        }
     }
 
         Write-Host "PASS: edited parser was exercised but left no divergence/frontier footprint" -ForegroundColor Green

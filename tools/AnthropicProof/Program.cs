@@ -20,24 +20,38 @@ var patches = new[]
         "@@ -10,7 +10,7 @@ namespace SampleApp\n-private const decimal DefaultFreeShippingThreshold = 50m;\n+private const decimal DefaultFreeShippingThreshold = 30m;"),
 };
 
+const string observationCitation = "OBSERVATION: test=SampleApp.Tests.ShippingTests.Order_below_threshold_pays_shipping; baseArgs=orderTotal=Primitive:40; prArgs=orderTotal=Primitive:40; baseReturn=Primitive:false; prReturn=Primitive:true; baseException=; prException=";
+const string diffCitation = "DIFF: samples/SampleApp/SettingsParser.cs: +private const decimal DefaultFreeShippingThreshold = 30m;";
+var whyCitations = new List<string> { observationCitation, diffCitation };
+if (member.TryGetProperty("consequences", out JsonElement consequences)
+    && consequences.ValueKind == JsonValueKind.Array
+    && consequences.GetArrayLength() > 0)
+{
+    JsonElement consequence = consequences[0];
+    JsonElement consequenceEvidence = consequence.GetProperty("evidence");
+    whyCitations.Add("CONSEQUENCE: test=" + consequenceEvidence.GetProperty("testId").GetString()
+        + "; member=" + consequence.GetProperty("memberName").GetString()
+        + "; baseReturn=" + consequenceEvidence.GetProperty("baseReturn").GetString()
+        + "; prReturn=" + consequenceEvidence.GetProperty("prReturn").GetString()
+        + "; baseException=" + (consequenceEvidence.TryGetProperty("baseException", out JsonElement baseException)
+            ? baseException.GetString()
+            : string.Empty)
+        + "; prException=" + (consequenceEvidence.TryGetProperty("prException", out JsonElement prException)
+            ? prException.GetString()
+            : string.Empty));
+}
+
 string acceptedText = JsonSerializer.Serialize(new
 {
     why = new
     {
         text = "The PR changes DefaultFreeShippingThreshold, and IsFreeShipping now returns true instead of false for the observed input 40.",
-        citations = new[]
-        {
-            "OBSERVATION: test=SampleApp.Tests.ShippingTests.Order_below_threshold_pays_shipping; baseArgs=orderTotal=Primitive:40; prArgs=orderTotal=Primitive:40; baseReturn=Primitive:false; prReturn=Primitive:true; baseException=; prException=",
-            "DIFF: samples/SampleApp/SettingsParser.cs: +private const decimal DefaultFreeShippingThreshold = 30m;",
-        },
+        citations = whyCitations,
     },
     test = new
     {
         text = "Add a test that applies the default settings, calls IsFreeShipping with 40, and expects false; it passes on base and fails on the PR because the result is true.",
-        citations = new[]
-        {
-            "OBSERVATION: test=SampleApp.Tests.ShippingTests.Order_below_threshold_pays_shipping; baseArgs=orderTotal=Primitive:40; prArgs=orderTotal=Primitive:40; baseReturn=Primitive:false; prReturn=Primitive:true; baseException=; prException=",
-        },
+        citations = new[] { observationCitation },
     },
 });
 var acceptedHandler = new FakeHandler(Response(acceptedText));
@@ -56,6 +70,7 @@ Assert(acceptedHandler.RequestCount == 1, "expected exactly one request for one 
 Assert(acceptedHandler.LastRequestBody.Contains("DefaultFreeShippingThreshold", StringComparison.Ordinal), "diff identifier missing from prompt");
 Assert(acceptedHandler.LastRequestBody.Contains("baseCallPath", StringComparison.Ordinal), "call path missing from prompt");
 Assert(acceptedHandler.LastRequestBody.Contains("assertionReaction", StringComparison.Ordinal), "untested evidence missing from prompt");
+Assert(acceptedHandler.LastRequestBody.Contains("CONSEQUENCE:", StringComparison.Ordinal), "downstream consequence missing from prompt");
 Assert(acceptedHandler.SawApiKey && acceptedHandler.SawVersion, "required Anthropic headers missing");
 
 string rejectedText = JsonSerializer.Serialize(new

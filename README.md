@@ -26,19 +26,22 @@ The finding that matters is the one in a file the pull request never touched.
 
 ## The demo
 
-**Primary — retry-policy default.** A one-line default change in `RetryPolicyParser.cs` leaves the
-parser's traced `(args, void return)` behavior identical, but changes `RetryEvaluator.ShouldRetry(2)`
-from `true` to `false`. Three propagated divergences collapse to one unexpected, untested headline.
+**Primary — payment retry regression.** `payment-config.json` omits `max_attempts`, so the base
+`ConfigParser.cs` resolves the inherited value `10`. The one edited line replaces that lookup with a
+local-key check and a default of `3`. The parser's traced `(args, void return)` behavior stays identical,
+but the unedited `RetryPolicy.ShouldRetry(503, 5)` changes from `true` to `false`. A payment gateway that
+recovers on attempt 2 still passes, leaving an untested call site under a green test; one that recovers on
+attempt 7 now fails because the unedited `PaymentClient` abandons the transient outage at attempt 3.
 
 ```powershell
 pwsh -File tools/verify-diff.ps1 -Mutate -Change retry
 ```
 
 ```text
-collapse                 : 3 diverged keys -> 1 frontier node(s)  (3.0x)
+collapse                 : 5 diverged keys -> 2 frontier node(s)  (2.5x)
 EXPECTED (edited file)   : 0 member(s), across 0 call site(s)
-UNEXPECTED (headline)    : 1 member(s), across 1 call site(s)
-   frontier  SampleApp.RetryEvaluator.ShouldRetry(System.Int32)
+UNEXPECTED (headline)    : 1 member(s), across 2 call site(s)
+   frontier  SampleApp.RetryPolicy.ShouldRetry(System.Int32,System.Int32)
    untested: True
 ```
 
@@ -65,16 +68,20 @@ observation.
 pwsh -File tools/verify-demo-fixtures.ps1
 ```
 
-To run the production Anthropic explainer for one mode, enter the key directly in the terminal and run:
+To run the production Anthropic explainer for one mode, protect the key with Windows DPAPI once, then run:
 
 ```powershell
-$env:ANTHROPIC_API_KEY = Read-Host -MaskInput 'Anthropic API key'
+New-Item "$HOME/.behaviordiff" -ItemType Directory -Force | Out-Null
+Read-Host -AsSecureString 'Anthropic API key' |
+   ConvertFrom-SecureString |
+   Set-Content "$HOME/.behaviordiff/anthropic.key"
 pwsh -File tools/run-real-explainer.ps1 -Change retry
 ```
 
 The command prints the raw Messages API response, the unchanged literal/citation validation verdict,
-and the final rendered comment. A validation rejection exits nonzero and is reported without weakening
-the checks.
+and the final rendered comment. The protected key can only be decrypted by the same Windows user on the
+same machine; it is not exported while target code builds or tests. A validation rejection exits nonzero
+and is reported without weakening the checks.
 
 **Scale case — FluentValidation, a real merged PR.** Upstream PR #2136 removes sync-over-async across
 `AbstractValidator` and the internal rule-execution path. Demonstrates the tool at scale on a library
