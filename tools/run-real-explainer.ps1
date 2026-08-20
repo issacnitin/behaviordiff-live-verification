@@ -14,7 +14,9 @@ if ([string]::IsNullOrWhiteSpace($apiKey)) {
         throw 'ANTHROPIC_API_KEY is not set and ~/.behaviordiff/anthropic.key does not exist.'
     }
 
-    $secureKey = ConvertTo-SecureString (Get-Content $keyFile -Raw)
+    $protectedKey = (Get-Content $keyFile -Raw).Trim()
+    $secureKey = ConvertTo-SecureString $protectedKey
+    $protectedKey = $null
     $keyPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureKey)
     try {
         $apiKey = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($keyPointer)
@@ -24,7 +26,7 @@ if ([string]::IsNullOrWhiteSpace($apiKey)) {
         $secureKey.Dispose()
     }
 }
-Remove-Item Env:ANTHROPIC_API_KEY
+Remove-Item Env:ANTHROPIC_API_KEY -ErrorAction SilentlyContinue
 
 $repo = Split-Path -Parent $PSScriptRoot
 $runId = [Guid]::NewGuid().ToString('N')
