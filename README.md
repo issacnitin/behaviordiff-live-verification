@@ -156,11 +156,18 @@ The posting gate defaults to `warn-only`. Set the pipeline variable `behaviorDif
 `fail-on-findings` only after the signal is trusted. A refusal posts a prominent non-verdict and stays
 nonblocking; it is never converted into an empty finding list.
 
-GitHub comments always include deterministic evidence for each unexpected member: up to three rendered
-base/PR observations with arguments, the exact base and PR call paths, per-test assertion reaction,
-source location, and any edited files present on those paths. The member detail is collapsed so the
-summary remains scannable. GitHub cannot anchor review comments on files outside the PR diff, which is
-why this evidence is retained in the summary comment.
+GitHub comments lead with the downstream consequence, then retain collapsed deterministic observations,
+deduplicated call-path shapes, and assertion reaction under a details disclosure. The summary deep-links
+the unedited source at the immutable PR head. Because GitHub cannot anchor a review thread outside the PR
+diff, BehaviorDiff instead anchors a cause comment on the first added line in the changed hunk; when
+several lines may participate, the comment says it is a hunk-level anchor rather than claiming one line.
+
+Checks API annotations are not a substitute. A live experiment successfully attached an annotation to
+an unchanged file, but reviewers saw no annotation on PR Overview or Files changed. The annotation text
+appeared only after expanding and selecting the check on the Checks tab, and its commit link did not
+render the annotation because the file was outside that commit diff. BehaviorDiff therefore does not use
+Checks annotations for outside-diff findings. The neutral experiment remains visible in
+[`run 96344946687`](https://github.com/issacnitin/behaviordiff-live-verification/runs/96344946687).
 
 Model explanation is optional. A trusted posting process may set `ANTHROPIC_API_KEY` to request one
 Anthropic Messages API explanation per unexpected member; without that variable, no model request is

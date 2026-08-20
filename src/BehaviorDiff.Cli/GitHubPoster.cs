@@ -64,6 +64,13 @@ namespace BehaviorDiff.Cli
                 "body").ConfigureAwait(false);
             IReadOnlyDictionary<string, ModelExplanation> explanations =
                 new Dictionary<string, ModelExplanation>(StringComparer.Ordinal);
+            IReadOnlyList<ChangedFilePatch> patches = String(findings, "status") == "analyzed"
+                ? await ListChangedFilePatches(
+                    client,
+                    root,
+                    context.PullRequestNumber,
+                    findings).ConfigureAwait(false)
+                : Array.Empty<ChangedFilePatch>();
 
             var anchorFailures = new List<string>();
             string summaryMarker = "<!-- behaviordiff:github:pr:" + context.PullRequestNumber + ":summary -->";
@@ -73,7 +80,13 @@ namespace BehaviorDiff.Cli
                 context.PullRequestNumber,
                 issueComments,
                 summaryMarker,
-                RenderSummary(findings, summaryMarker, anchorFailures, explanations)).ConfigureAwait(false);
+                RenderSummary(
+                    findings,
+                    summaryMarker,
+                    anchorFailures,
+                    explanations,
+                    context.Repository,
+                    context.HeadSha)).ConfigureAwait(false);
             if (!issueComments.Any(comment => comment.Body.Contains(summaryMarker, StringComparison.Ordinal)))
             {
                 issueComments.Add(new ExistingComment(summaryCommentId, summaryMarker));
@@ -85,14 +98,13 @@ namespace BehaviorDiff.Cli
                 foreach (JsonElement member in members.EnumerateArray()
                     .Where(member => String(member, "attribution") == "unexpected"))
                 {
-                    string? filePath = NullableString(member, "filePath");
-                    int? line = NullableInt(member, "line");
-                    if (filePath is null || line is null || line <= 0 || Bool(member, "sourceGenerated"))
+                    CauseAnchor? anchor = FindCauseAnchor(patches);
+                    if (anchor is null)
                     {
                         continue;
                     }
 
-                    string marker = "<!-- behaviordiff:github:pr:" + context.PullRequestNumber + ":member:"
+                    string marker = "<!-- behaviordiff:github:pr:" + context.PullRequestNumber + ":cause:"
                         + MemberKey(String(member, "memberName")) + " -->";
                     try
                     {
@@ -102,22 +114,18 @@ namespace BehaviorDiff.Cli
                             context,
                             reviewComments,
                             marker,
-                            RenderMember(
+                            RenderCauseComment(
                                 member,
                                 marker,
-                                explanations.TryGetValue(String(member, "memberName"), out ModelExplanation? explanation)
-                                    ? explanation
-                                    : null),
-                            filePath,
-                            line.Value).ConfigureAwait(false);
+                                anchor,
+                                context),
+                            anchor.FilePath,
+                            anchor.Line).ConfigureAwait(false);
                     }
                     catch (GitHubApiException ex)
                     {
-                        // GitHub review comments can only target a line in the unified PR diff. An
-                        // UNEXPECTED file is normally absent from that diff by definition. Preserve the
-                        // platform refusal in the summary rather than suppressing the finding or the post.
-                        anchorFailures.Add(filePath + ":" + line.Value);
-                        Console.WriteLine("  GitHub line comment not created: " + filePath + ":" + line.Value
+                        anchorFailures.Add(anchor.FilePath + ":" + anchor.Line);
+                        Console.WriteLine("  GitHub cause comment not created: " + anchor.FilePath + ":" + anchor.Line
                             + " - GitHub REST " + (int)ex.StatusCode + " " + ex.StatusCode + ": " + ex.Response);
                     }
                 }
@@ -131,16 +139,18 @@ namespace BehaviorDiff.Cli
                     context.PullRequestNumber,
                     issueComments,
                     summaryMarker,
-                    RenderSummary(findings, summaryMarker, anchorFailures, explanations)).ConfigureAwait(false);
+                    RenderSummary(
+                        findings,
+                        summaryMarker,
+                        anchorFailures,
+                        explanations,
+                        context.Repository,
+                        context.HeadSha)).ConfigureAwait(false);
             }
 
             try
             {
-                explanations = await ExplainUnexpectedMembers(
-                    client,
-                    root,
-                    context,
-                    findings).ConfigureAwait(false);
+                explanations = await ExplainUnexpectedMembers(findings, patches).ConfigureAwait(false);
                 if (explanations.Count > 0)
                 {
                     await UpsertIssueComment(
@@ -149,7 +159,13 @@ namespace BehaviorDiff.Cli
                         context.PullRequestNumber,
                         issueComments,
                         summaryMarker,
-                        RenderSummary(findings, summaryMarker, anchorFailures, explanations)).ConfigureAwait(false);
+                        RenderSummary(
+                            findings,
+                            summaryMarker,
+                            anchorFailures,
+                            explanations,
+                            context.Repository,
+                            context.HeadSha)).ConfigureAwait(false);
                 }
             }
             catch (Exception ex)
@@ -193,10 +209,8 @@ namespace BehaviorDiff.Cli
         }
 
         private async Task<IReadOnlyDictionary<string, ModelExplanation>> ExplainUnexpectedMembers(
-            HttpClient gitHubClient,
-            string root,
-            GitHubContext context,
-            JsonElement findings)
+            JsonElement findings,
+            IReadOnlyList<ChangedFilePatch> patches)
         {
             string? apiKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
             if (string.IsNullOrWhiteSpace(apiKey)
@@ -206,11 +220,6 @@ namespace BehaviorDiff.Cli
                 return new Dictionary<string, ModelExplanation>(StringComparer.Ordinal);
             }
 
-            IReadOnlyList<ChangedFilePatch> patches = await ListChangedFilePatches(
-                gitHubClient,
-                root,
-                context.PullRequestNumber,
-                findings).ConfigureAwait(false);
             var explanations = new Dictionary<string, ModelExplanation>(StringComparer.Ordinal);
             using AnthropicExplainer explainer = _explainerFactory(apiKey);
             foreach (JsonElement member in members.EnumerateArray()
@@ -279,6 +288,80 @@ namespace BehaviorDiff.Cli
             }
 
             return patches;
+        }
+
+        private static CauseAnchor? FindCauseAnchor(IReadOnlyList<ChangedFilePatch> patches)
+        {
+            var candidates = new List<CauseAnchor>();
+            foreach (ChangedFilePatch patch in patches)
+            {
+                int? newLine = null;
+                foreach (string rawLine in patch.Patch.Split('\n'))
+                {
+                    string line = rawLine.TrimEnd('\r');
+                    Match hunk = Regex.Match(line, @"^@@ -\d+(?:,\d+)? \+(?<line>\d+)(?:,\d+)? @@");
+                    if (hunk.Success)
+                    {
+                        newLine = int.Parse(hunk.Groups["line"].Value, CultureInfo.InvariantCulture);
+                        continue;
+                    }
+
+                    if (newLine is null || line.StartsWith("\\", StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    if (line.StartsWith("+", StringComparison.Ordinal)
+                        && !line.StartsWith("+++", StringComparison.Ordinal))
+                    {
+                        candidates.Add(new CauseAnchor(
+                            patch.FilePath,
+                            newLine.Value,
+                            line.Substring(1).Trim(),
+                            MultipleCandidates: false));
+                        newLine++;
+                    }
+                    else if (!line.StartsWith("-", StringComparison.Ordinal))
+                    {
+                        newLine++;
+                    }
+                }
+            }
+
+            return candidates.Count == 0
+                ? null
+                : candidates[0] with { MultipleCandidates = candidates.Count > 1 };
+        }
+
+        private static string RenderCauseComment(
+            JsonElement member,
+            string marker,
+            CauseAnchor anchor,
+            GitHubContext context)
+        {
+            var builder = new StringBuilder();
+            builder.AppendLine("### BehaviorDiff: downstream behavior changed");
+            builder.AppendLine();
+            builder.AppendLine("**" + Code(ShortMember(String(member, "memberName")))
+                + " changed even though this PR did not edit it.**");
+            builder.AppendLine(LeadImpact(member));
+            builder.AppendLine();
+            builder.AppendLine(anchor.MultipleCandidates
+                ? "This changed hunk is the likely cause; several added lines participate, so the comment is anchored on the hunk's first added line."
+                : "This added line is the likely cause.");
+            builder.AppendLine(Code(anchor.AddedLine));
+
+            if (NullableString(member, "filePath") is string filePath
+                && NullableInt(member, "line") is int line)
+            {
+                builder.AppendLine();
+                builder.AppendLine("Unedited source: [" + Path.GetFileName(filePath) + ":" + line + "](https://github.com/"
+                    + context.Repository + "/blob/" + context.HeadSha + "/" + filePath + "#L" + line + ").");
+            }
+
+            builder.AppendLine();
+            builder.Append(marker);
+            return builder.ToString();
         }
 
         private async Task<long> UpsertIssueComment(
@@ -417,7 +500,9 @@ namespace BehaviorDiff.Cli
             JsonElement findings,
             string marker,
             IReadOnlyList<string> anchorFailures,
-            IReadOnlyDictionary<string, ModelExplanation>? explanations = null)
+            IReadOnlyDictionary<string, ModelExplanation>? explanations = null,
+            string? repository = null,
+            string? headSha = null)
         {
             var builder = new StringBuilder();
             string status = String(findings, "status");
@@ -479,7 +564,7 @@ namespace BehaviorDiff.Cli
                 builder.AppendLine();
                 builder.AppendLine("</details>");
                 builder.AppendLine();
-                builder.AppendLine(CoverageFooter(findings, lead));
+                builder.AppendLine(CoverageFooter(findings, lead, repository, headSha));
             }
 
             builder.AppendLine();
@@ -688,11 +773,23 @@ namespace BehaviorDiff.Cli
             return untested + " of the " + tests + " tests that executed this did not assert on the change.";
         }
 
-        private static string CoverageFooter(JsonElement findings, JsonElement member)
+        private static string CoverageFooter(
+            JsonElement findings,
+            JsonElement member,
+            string? repository,
+            string? headSha)
         {
             JsonElement coverage = findings.GetProperty("coverage").GetProperty("summary");
+            string source = Source(member);
+            string renderedSource = repository is not null
+                && headSha is not null
+                && NullableString(member, "filePath") is string filePath
+                && NullableInt(member, "line") is int line
+                    ? "[" + Path.GetFileName(filePath) + ":" + line + "](https://github.com/"
+                        + repository + "/blob/" + headSha + "/" + filePath + "#L" + line + ")"
+                    : Code(source);
             return "_" + Int(coverage, "exercisedEditedFiles") + " of " + Int(coverage, "editedFiles")
-                + " edited files exercised. " + Code(Source(member)) + "._";
+                + " edited files exercised. " + renderedSource + "._";
         }
 
         private static string ShortMember(string memberName)
@@ -1097,6 +1194,12 @@ namespace BehaviorDiff.Cli
         private sealed record ExistingComment(long Id, string Body);
 
         private sealed record GitHubContext(int PullRequestNumber, string Repository, string HeadSha, bool IsFork);
+
+        private sealed record CauseAnchor(
+            string FilePath,
+            int Line,
+            string AddedLine,
+            bool MultipleCandidates);
 
         private sealed class GitHubApiException : Exception
         {

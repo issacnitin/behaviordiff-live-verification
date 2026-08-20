@@ -332,20 +332,30 @@ try
             "claude-sonnet-5"));
     await poster.PostAsync(findings.RootElement);
 
-    int deterministicPost = requestOrder.IndexOf("github:post-summary");
-    int reviewAttempt = requestOrder.IndexOf("github:post-review");
-    int anchorPatch = requestOrder.IndexOf("github:patch-anchor");
     int diffFetch = requestOrder.IndexOf("github:get-files");
+    int deterministicPost = requestOrder.IndexOf("github:post-summary");
+    int causeComment = requestOrder.IndexOf("github:post-cause-review");
     int modelPost = requestOrder.IndexOf("anthropic:post");
     int enrichedPatch = requestOrder.IndexOf("github:patch-enriched");
-    Assert(deterministicPost >= 0 && deterministicPost < reviewAttempt && reviewAttempt < anchorPatch
-        && anchorPatch < diffFetch && diffFetch < modelPost && modelPost < enrichedPatch,
+    Assert(diffFetch >= 0 && diffFetch < deterministicPost && deterministicPost < causeComment
+        && causeComment < modelPost && modelPost < enrichedPatch,
         "optional enrichment ran before deterministic summary posting");
     Assert(gitHubHandler.SummaryPostCount == 1, "enrichment created a duplicate summary comment");
-    Assert(gitHubHandler.SummaryPatchCount == 2, "anchor/model enrichment did not update the deterministic summary comment");
+    Assert(gitHubHandler.SummaryPatchCount == 1, "model enrichment did not update the deterministic summary comment once");
+    Assert(gitHubHandler.ReviewPath == patches[0].FilePath && gitHubHandler.ReviewLine == 10,
+        "cause comment did not anchor on the changed hunk's added line");
+    Assert(gitHubHandler.ReviewBody.Contains("This added line is the likely cause", StringComparison.Ordinal),
+        "cause comment does not explain its anchor");
+    Assert(gitHubHandler.SummaryBody.Contains(
+        "https://github.com/example/repo/blob/proof-head/samples/SampleApp/ShippingCalculator.cs#L10",
+        StringComparison.Ordinal),
+        "summary did not deep-link the unedited source at the PR head");
 
     Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", null);
-    var noKeyHandler = new GitHubHandler(new List<string>(), patches[0]);
+    var multiLinePatch = new ChangedFilePatch(
+        patches[0].FilePath,
+        "@@ -10,1 +10,2 @@ namespace SampleApp\n+first changed line\n+second changed line");
+    var noKeyHandler = new GitHubHandler(new List<string>(), multiLinePatch);
     bool noKeyModelCalled = false;
     var noKeyPoster = new GitHubPoster(
         noKeyHandler,
@@ -356,6 +366,9 @@ try
         });
     await noKeyPoster.PostAsync(findings.RootElement);
     Assert(!noKeyModelCalled, "no-key posting invoked the model client");
+    Assert(noKeyHandler.ReviewLine == 10
+        && noKeyHandler.ReviewBody.Contains("several added lines participate", StringComparison.Ordinal),
+        "multi-line cause did not anchor on the first addition and identify the hunk-level cause");
 }
 finally
 {
@@ -378,6 +391,7 @@ Console.WriteLine("PASS: prompt contains observations, paths, assertion reaction
 Console.WriteLine("PASS: missing/wrong-case literals and fabricated citations are rejected");
 Console.WriteLine("PASS: raw non-success and malformed responses survive diagnostic validation");
 Console.WriteLine("PASS: deterministic post precedes enrichment and the same comment is patched");
+Console.WriteLine("PASS: cause comment anchors on the changed hunk and summary deep-links unedited source");
 Console.WriteLine("PASS: no-key posting never invokes Anthropic");
 Console.WriteLine("PASS: oversized evidence falls back below GitHub's body limit");
 Console.WriteLine("PASS: refused and clean budget fallbacks preserve their verdicts");
@@ -436,6 +450,14 @@ sealed class GitHubHandler(List<string> order, ChangedFilePatch patch) : HttpMes
 
     internal int SummaryPatchCount { get; private set; }
 
+    internal string SummaryBody { get; private set; } = string.Empty;
+
+    internal string ReviewBody { get; private set; } = string.Empty;
+
+    internal string? ReviewPath { get; private set; }
+
+    internal int? ReviewLine { get; private set; }
+
     protected override Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request,
         CancellationToken cancellationToken)
@@ -458,20 +480,26 @@ sealed class GitHubHandler(List<string> order, ChangedFilePatch patch) : HttpMes
         }
         else if (request.Method == HttpMethod.Post && path.EndsWith("/pulls/1/comments", StringComparison.Ordinal))
         {
-            order.Add("github:post-review");
-            status = HttpStatusCode.UnprocessableEntity;
-            body = "{\"message\":\"outside diff\"}";
+            order.Add("github:post-cause-review");
+            ReviewBody = request.Content?.ReadAsStringAsync(cancellationToken).GetAwaiter().GetResult() ?? string.Empty;
+            using JsonDocument payload = JsonDocument.Parse(ReviewBody);
+            ReviewPath = payload.RootElement.GetProperty("path").GetString();
+            ReviewLine = payload.RootElement.GetProperty("line").GetInt32();
+            body = "{\"id\":456}";
         }
         else if (request.Method == HttpMethod.Post && path.EndsWith("/issues/1/comments", StringComparison.Ordinal))
         {
             order.Add("github:post-summary");
             SummaryPostCount++;
+            using JsonDocument payload = JsonDocument.Parse(
+                request.Content?.ReadAsStringAsync(cancellationToken).GetAwaiter().GetResult() ?? "{}");
+            SummaryBody = payload.RootElement.GetProperty("body").GetString() ?? string.Empty;
             body = "{\"id\":123}";
         }
         else if (request.Method == HttpMethod.Patch && path.EndsWith("/issues/comments/123", StringComparison.Ordinal))
         {
             SummaryPatchCount++;
-            order.Add(SummaryPatchCount == 1 ? "github:patch-anchor" : "github:patch-enriched");
+            order.Add("github:patch-enriched");
             body = "{\"id\":123}";
         }
         else
