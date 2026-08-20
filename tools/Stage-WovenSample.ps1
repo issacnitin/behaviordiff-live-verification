@@ -26,6 +26,8 @@ Copy-Item "$built\*" $OutDir -Recurse -Force
 
 $weaver = Join-Path $repo 'tools/Weaver/Weaver.csproj'
 foreach ($target in @(
+    @{ Name = 'Infrastructure.Collections'; Test = $false },
+    @{ Name = 'Commerce.Pricing'; Test = $false },
         @{ Name = 'SampleApp'; Test = $false },
         @{ Name = 'SampleApp.Plugin'; Test = $false },
         @{ Name = 'SampleApp.Tests'; Test = $true })) {
@@ -35,8 +37,8 @@ foreach ($target in @(
 
     $weaveArgs = @(
         '--assembly', $dll,
-        '--include', 'SampleApp',
-        '--exclude', 'SampleApp.Diagnostics,SampleApp.Persistence')
+        '--include', 'SampleApp,Commerce.Pricing,Infrastructure.Collections',
+        '--exclude', 'SampleApp.Diagnostics,SampleApp.Persistence,Infrastructure.Collections')
     if ($target.Test) { $weaveArgs += '--test-assembly' }
 
     $out = dotnet run --project $weaver -c Release -v quiet --no-build -- @weaveArgs 2>&1

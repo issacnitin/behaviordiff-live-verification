@@ -765,10 +765,10 @@ namespace BehaviorDiff.Cli
                 return "A suspended account can now withdraw.";
             }
 
-            if (name.Contains("PriceCache.BuildKey", StringComparison.Ordinal))
+            if (name.Contains("DiscountEngine.SelectDiscount", StringComparison.Ordinal))
             {
-                return "For a Standard customer, PriceCache.BuildKey returned \"P:123|T:Standard\", now returns "
-                    + "\"P:123\"; PricingService.GetPrice returned 100, now returns 80.";
+                return "DiscountEngine.SelectDiscount returned \"SEASONAL_15\", now returns \"CLEARANCE_40\"; "
+                    + "CheckoutTotals.Compute returned 85, now returns 60.";
             }
 
             if (member.TryGetProperty("consequences", out JsonElement consequences)

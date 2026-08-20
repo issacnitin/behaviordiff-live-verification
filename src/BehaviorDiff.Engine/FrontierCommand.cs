@@ -377,13 +377,13 @@ namespace BehaviorDiff.Engine
                     + "' traced='" + (tracePaths.FirstOrDefault() ?? "<none>") + "'.");
             }
 
-            // A declarative options file can be present in the manifest while every member is deliberately
-            // excluded by MethodSelector. In that narrow case the zero-call footprint is itself explained;
-            // downstream frontiers remain useful. Missing manifest coverage and every other skip reason refuse.
+            // A changed file can be present in the manifest while every member is deliberately skipped by
+            // MethodSelector. In that narrow case the zero-call footprint is itself explained; downstream
+            // frontiers remain useful. Missing manifest coverage and mixed skip reasons still refuse.
             bool intentionallyUntraced = AreChangedFilesIntentionallyUntraced(set, changed);
             if (changed.Count > 0 && exactMatches == 0 && intentionallyUntraced)
             {
-                Console.WriteLine("  all edited members were intentionally skipped as properties or type initializers");
+                Console.WriteLine("  all edited members were intentionally skipped by repository-owned tracing policy");
             }
 
             bool unattributable = changed.Count > 0 && nodes.Count > 0 && exactMatches == 0 && !intentionallyUntraced;
@@ -613,7 +613,9 @@ namespace BehaviorDiff.Engine
                             StringComparison.Ordinal))
                     .ToArray();
                 if (members.Length == 0 || members.Any(member => member.Status != "Skipped"
-                    || (member.SkipReason != "PropertyOrOperator" && member.SkipReason != "TypeInitializer")))
+                    || (member.SkipReason != "PropertyOrOperator"
+                        && member.SkipReason != "TypeInitializer"
+                        && member.SkipReason != "ExcludedNamespace")))
                 {
                     return false;
                 }

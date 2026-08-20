@@ -26,19 +26,21 @@ The finding that matters is the one in a file the pull request never touched.
 
 ## The demo
 
-**Primary — price-cache key regression.** The only edited file, `CacheSettings.cs`, removes customer tier
-from the price-cache key to improve hit rate. Its property and type initializer are deliberately skipped by
-the tracer, so it contributes zero traced members or calls. In unedited code, a Gold lookup for product 123
-warms `P:123` with the discounted price 80, and a later Standard lookup hits that same entry instead of
-computing the full price 100. The Gold test stays green, the positive-price test stays green precisely because
-the wrong price is still positive, and the Standard full-price test catches the regression.
+**Primary — stable-sort regression.** The only edited file is the general-purpose helper
+`src/Infrastructure.Collections/SortingExtensions.cs`, in a different project and namespace from pricing.
+It replaces stable `OrderBy` with unstable `List.Sort` to avoid a LINQ allocation. Infrastructure collections
+are deliberately excluded by repository tracing policy, so the edited file contributes zero traced members
+or calls. In unedited `src/Commerce.Pricing`, two matching discount rules share priority 10. The stable sort
+keeps `SEASONAL_15` ahead of `CLEARANCE_40`; the refactor deterministically reverses them, changing checkout
+from 85 to 60. The applied-discount test stays green, the list-price ceiling stays green precisely because the
+wrong discount is larger, and the tie-winner test catches the regression.
 
 ```powershell
-pwsh -File tools/verify-diff.ps1 -Mutate -Change cache
+pwsh -File tools/verify-diff.ps1 -Mutate -Change sort
 ```
 
-The deterministic run reports 14 diverged keys collapsed to nine frontier call sites. The headline is
-the unedited `PriceCache.BuildKey`: all three tests execute it, while two have no assertion react.
+The deterministic run reports five diverged keys collapsed to three frontier call sites. The headline is
+the unedited `DiscountEngine.SelectDiscount`: all three tests execute it, while two have no assertion react.
 
 **Secondary — payment retry regression.** `payment-config.json` omits `max_attempts`, so the base
 `ConfigParser.cs` resolves the inherited value `10`. The one edited line replaces that lookup with a
@@ -68,7 +70,8 @@ pwsh -File tools/verify-diff.ps1 -Mutate -Change config
 
 All three demo modes enforce the same constraints in one proof: exactly one edited file has no
 divergence/frontier footprint, collapse is above `1x`, and the headline has an `untested: True`
-observation. The cache mode additionally proves that the edited file has zero traced members and calls.
+observation. The sort mode additionally proves that the edited file has zero traced members and calls, and
+runs the mutated tie-winner test in five fresh processes to confirm the swap is deterministic.
 
 ```powershell
 pwsh -File tools/verify-demo-fixtures.ps1
@@ -81,7 +84,7 @@ New-Item "$HOME/.behaviordiff" -ItemType Directory -Force | Out-Null
 Read-Host -AsSecureString 'Anthropic API key' |
    ConvertFrom-SecureString |
    Set-Content "$HOME/.behaviordiff/anthropic.key"
-pwsh -File tools/run-real-explainer.ps1 -Change cache
+pwsh -File tools/run-real-explainer.ps1 -Change sort
 ```
 
 The command prints the raw Messages API response, the unchanged literal/citation validation verdict,
@@ -270,7 +273,7 @@ pwsh -File tools/verify-ci-refs.ps1          # merge-base refs and invalid findi
 pwsh -File tools/verify-github-refs.ps1      # event SHAs and shallow-clone refusal
 pwsh -File tools/verify-coverage.ps1         # values, paths, assertion reaction, and coverage honesty
 pwsh -File tools/verify-anthropic.ps1        # one request/member and grounded-output rejection
-pwsh -File tools/verify-demo-fixtures.ps1    # cache, retry, config constraints
+pwsh -File tools/verify-demo-fixtures.ps1    # sort, retry, config constraints
 pwsh -File tools/verify-mcp.ps1              # MCP reads canonical findings.json
 pwsh -File tools/verify-ado-post.ps1         # local ADO REST contract and idempotency
 pwsh -File tools/verify-pipeline.ps1         # mocked end-to-end CI seams

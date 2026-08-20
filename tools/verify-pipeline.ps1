@@ -19,7 +19,7 @@ $required = @{
     'posting command' = 'post --provider=azuredevops'
     'explicit OAuth token mapping' = 'SYSTEM_ACCESSTOKEN: $(System.AccessToken)'
     'warn-only default' = 'behaviorDiffGate: warn-only'
-    'repository-owned namespace exclusions' = 'behaviorDiffExcludeNamespaces: SampleApp.Diagnostics,SampleApp.Persistence'
+    'repository-owned namespace exclusions' = 'behaviorDiffExcludeNamespaces: SampleApp.Diagnostics,SampleApp.Persistence,Infrastructure.Collections'
     'always-run cleanup/posting' = 'condition: always()'
     'trace cleanup' = 'Remove-Item $work -Recurse -Force'
     'hosted measurement output' = 'HOSTED MEASUREMENT'

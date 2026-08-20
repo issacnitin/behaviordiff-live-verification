@@ -2,7 +2,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [ValidateSet('cache', 'retry', 'permission', 'config')]
+    [ValidateSet('sort', 'retry', 'permission', 'config')]
     [string]$Change
 )
 
@@ -33,10 +33,10 @@ $runId = [Guid]::NewGuid().ToString('N')
 $prTree = Join-Path ([IO.Path]::GetTempPath()) "behaviordiff-live-pr-$runId"
 $work = Join-Path ([IO.Path]::GetTempPath()) "behaviordiff-live-$runId"
 $case = switch ($Change) {
-    'cache' { @{
-        File = 'samples/SampleApp/CacheSettings.cs'
-        Base = 's_priceCacheKeyFields = PriceCacheKeyFields.ProductId | PriceCacheKeyFields.CustomerTier;'
-        Pr = 's_priceCacheKeyFields = PriceCacheKeyFields.ProductId;'
+    'sort' { @{
+        File = 'src/Infrastructure.Collections/SortingExtensions.cs'
+        Base = 'Func<T, int> key) => src.OrderBy(key).ToList();'
+        Pr = 'var list = src.ToList();'
     } }
     'retry' { @{
         File = 'samples/SampleApp/ConfigParser.cs'

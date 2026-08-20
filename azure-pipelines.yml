@@ -11,7 +11,7 @@ variables:
   behaviorDiffGate: warn-only
   behaviorDiffWork: $(Agent.TempDirectory)/behaviordiff-work
   behaviorDiffFindings: $(Build.ArtifactStagingDirectory)/behaviordiff/findings.json
-  behaviorDiffExcludeNamespaces: SampleApp.Diagnostics,SampleApp.Persistence
+  behaviorDiffExcludeNamespaces: SampleApp.Diagnostics,SampleApp.Persistence,Infrastructure.Collections
 
 steps:
   # Ref resolution needs both parents of ADO's synthetic PR merge commit and their merge base.

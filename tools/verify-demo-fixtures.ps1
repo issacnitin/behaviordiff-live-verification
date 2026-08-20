@@ -2,19 +2,19 @@
 $ErrorActionPreference = 'Stop'
 $cases = @(
     @{
-        Change = 'cache'
-        ChangedFile = 'samples/SampleApp/CacheSettings.cs'
-        Headline = 'SampleApp.PriceCache.BuildKey(System.Int32,System.String)'
-        DivergedKeys = 14
-        FrontierNodes = 9
-        FrontierVerified = 7
+        Change = 'sort'
+        ChangedFile = 'src/Infrastructure.Collections/SortingExtensions.cs'
+        Headline = 'Commerce.Pricing.DiscountEngine.SelectDiscount(System.Decimal)'
+        DivergedKeys = 5
+        FrontierNodes = 3
+        FrontierVerified = 3
         ChangedFileExercised = $false
         ChangedTracedMembers = 0
         ChangedCallSites = 0
         ChangedCalls = 0
         HeadlineCallSites = 3
         UntestedCallSites = 2
-        UnexpectedMembers = 3
+        UnexpectedMembers = 1
     }
     @{
         Change = 'retry'
@@ -84,6 +84,11 @@ foreach ($case in $cases) {
 
     if ($frontier.counts.expected -ne 0) {
         throw "$($case.Change): edited file left $($frontier.counts.expected) frontier footprint(s)"
+    }
+
+    if ($case.Change -eq 'sort' `
+        -and ($frontier.counts.toolingGaps -ne 0 -or $frontier.counts.manifestNoiseCancelled -ne 0)) {
+        throw "sort: deterministic helper refactor produced manifest gaps/noise: $($frontier.counts | ConvertTo-Json -Compress)"
     }
 
     if ($frontier.counts.divergedKeys -ne $case.DivergedKeys `
@@ -181,67 +186,64 @@ foreach ($case in $cases) {
         }
     }
 
-    if ($case.Change -eq 'cache') {
+    if ($case.Change -eq 'sort') {
         if ($finding.assertionReactionSummary -ne '3 tests executed this; 1 test had an assertion react.' `
-            -or $comment -notmatch 'PriceCache\.BuildKey.*changed, but this PR didn''t edit it' `
-            -or $comment -notmatch 'BuildKey returned "P:123\|T:Standard", now returns "P:123"' `
-            -or $comment -notmatch 'PricingService\.GetPrice returned 100, now returns 80' `
+            -or $comment -notmatch 'DiscountEngine\.SelectDiscount.*changed, but this PR didn''t edit it' `
+            -or $comment -notmatch 'SelectDiscount returned "SEASONAL_15", now returns "CLEARANCE_40"' `
+            -or $comment -notmatch 'CheckoutTotals\.Compute returned 85, now returns 60' `
             -or $comment -notmatch '2 of the 3 tests that executed this did not assert on the change' `
             -or $comment -notmatch '_0 of 1 edited files exercised') {
-            throw 'cache: concise consequence-first comment drifted'
+            throw 'sort: concise consequence-first comment drifted'
         }
 
-        $standardKeys = @($finding.evidence | Where-Object {
-            $_.ordinal -eq 1 `
-                -and $_.baseArgs -eq 'productId=Primitive:123, customerTier=Primitive:"Standard"' `
-                -and $_.prArgs -eq 'productId=Primitive:123, customerTier=Primitive:"Standard"' `
-                -and $_.baseReturn -eq 'Primitive:"P:123|T:Standard"' `
-                -and $_.prReturn -eq 'Primitive:"P:123"'
+        $selections = @($finding.evidence | Where-Object {
+            $_.baseArgs -eq 'listPrice=Primitive:100' `
+                -and $_.prArgs -eq 'listPrice=Primitive:100' `
+                -and $_.baseReturn -eq 'Primitive:"SEASONAL_15"' `
+                -and $_.prReturn -eq 'Primitive:"CLEARANCE_40"'
         })
-        if ($standardKeys.Count -ne 2) {
-            throw 'cache: Standard key did not deterministically lose CustomerTier in both warmed-cache tests'
-        }
-
-        $goldKeys = @($finding.evidence | Where-Object {
-            $_.baseArgs -eq 'productId=Primitive:123, customerTier=Primitive:"Gold"' `
-                -and $_.prArgs -eq 'productId=Primitive:123, customerTier=Primitive:"Gold"' `
-                -and $_.baseReturn -eq 'Primitive:"P:123|T:Gold"' `
-                -and $_.prReturn -eq 'Primitive:"P:123"'
-        })
-        if ($goldKeys.Count -ne 3) {
-            throw 'cache: Gold key did not deterministically lose CustomerTier in all tests'
+        if ($selections.Count -ne 3) {
+            throw 'sort: equal-priority selection did not swap deterministically in all three tests'
         }
 
         $partialOracle = @($finding.consequences | Where-Object {
-            $_.memberName -eq 'SampleApp.PricingService.GetPrice(System.Int32,System.String)' `
-                -and $_.evidence.testId -like '*Price_is_never_negative' `
-                -and $_.evidence.baseReturn -eq 'Primitive:100' `
-                -and $_.evidence.prReturn -eq 'Primitive:80' `
-                -and $_.evidence.baseArgs -match 'customerTier=Primitive:"Standard"' `
+            $_.memberName -eq 'Commerce.Pricing.CheckoutTotals.Compute(System.Decimal)' `
+                -and $_.evidence.testId -like '*Total_is_never_above_list_price' `
+                -and $_.evidence.baseReturn -eq 'Primitive:85.00' `
+                -and $_.evidence.prReturn -eq 'Primitive:60.00' `
                 -and $_.evidence.assertionReacted -eq $false
         })
         if ($partialOracle.Count -ne 1) {
-            throw 'cache: positive-price partial oracle did not retain the wrong Standard price evidence'
+            throw 'sort: list-price partial oracle did not retain the larger wrong-discount evidence'
         }
 
-        $caughtOracle = @($finding.consequences | Where-Object {
-            $_.memberName -eq 'SampleApp.PricingService.GetPrice(System.Int32,System.String)' `
-                -and $_.evidence.testId -like '*Standard_customer_pays_full_price' `
-                -and $_.evidence.baseReturn -eq 'Primitive:100' `
-                -and $_.evidence.prReturn -eq 'Primitive:80' `
-                -and $_.evidence.assertionReacted -eq $true
+        $caughtOracle = @($finding.evidence | Where-Object {
+            $_.testId -like '*Seasonal_discount_wins_ties' `
+                -and $_.baseReturn -eq 'Primitive:"SEASONAL_15"' `
+                -and $_.prReturn -eq 'Primitive:"CLEARANCE_40"' `
+                -and $_.assertionReacted -eq $true
         })
         if ($caughtOracle.Count -ne 1) {
-            throw 'cache: failing Standard-price assertion did not retain the 100 to 80 consequence'
+            throw 'sort: failing tie-winner assertion did not retain the selected-discount consequence'
         }
 
         $skipped = @($divergences.coverage.members | Where-Object {
-            $_.methodFullName -like 'SampleApp.CacheSettings.*'
+            $_.methodFullName -like 'Infrastructure.Collections.SortingExtensions.ByPriority*'
         })
-        if (@($skipped | Where-Object skipReason -eq 'PropertyOrOperator').Count -ne 1 `
-            -or @($skipped | Where-Object skipReason -eq 'TypeInitializer').Count -ne 1 `
-            -or @($skipped | Where-Object status -ne 'Skipped').Count -ne 0) {
-            throw 'cache: edited settings file was not skipped solely as property and type initializer'
+        if ($skipped.Count -ne 1 `
+            -or $skipped[0].skipReason -ne 'ExcludedNamespace' `
+            -or $skipped[0].status -ne 'Skipped') {
+            throw 'sort: edited helper was not skipped by the repository-owned infrastructure exclusion'
+        }
+
+        $testProject = Join-Path $prTree 'samples/SampleApp.Tests/SampleApp.Tests.csproj'
+        foreach ($repeat in 1..5) {
+            $output = & dotnet test $testProject -c Release --no-build --nologo `
+                --filter 'FullyQualifiedName~Seasonal_discount_wins_ties' 2>&1
+            if ($LASTEXITCODE -ne 1 `
+                -or ($output -join "`n") -notmatch 'CLEARANCE_40') {
+                throw "sort: fresh PR test process $repeat did not deterministically select CLEARANCE_40"
+            }
         }
     }
 

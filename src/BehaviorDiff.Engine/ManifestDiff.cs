@@ -51,6 +51,18 @@ namespace BehaviorDiff.Engine
                     continue;
                 }
 
+                // A member added inside a repository-excluded namespace is intentionally unobservable on
+                // both sides: it did not exist in base, and policy guarantees it cannot emit PR events.
+                // This commonly occurs when a refactor introduces a compiler-generated closure. It is not
+                // a loss of coverage; every other absent/skipped transition remains a tooling gap.
+                ManifestEntry? present = baseEntry ?? prEntry;
+                if ((baseEntry is null || prEntry is null)
+                    && present?.Status == PatchStatus.Skipped
+                    && present.SkipReason == "ExcludedNamespace")
+                {
+                    continue;
+                }
+
                 gaps.Add(new ToolingGap
                 {
                     Scope = "member",

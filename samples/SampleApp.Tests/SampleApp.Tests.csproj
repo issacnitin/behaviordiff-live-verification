@@ -9,6 +9,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\src\Commerce.Pricing\Commerce.Pricing.csproj" />
     <ProjectReference Include="..\SampleApp\SampleApp.csproj" />
     <ProjectReference Include="..\SampleApp.Plugin\SampleApp.Plugin.csproj" />
     <ProjectReference Include="..\..\src\BehaviorDiff.Tracer.Xunit\BehaviorDiff.Tracer.Xunit.csproj" />
