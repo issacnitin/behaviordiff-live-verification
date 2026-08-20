@@ -17,12 +17,16 @@ if (string.IsNullOrWhiteSpace(apiKey))
 using JsonDocument findings = JsonDocument.Parse(File.ReadAllText(args[0]));
 JsonElement member = findings.RootElement.GetProperty("members").EnumerateArray()
     .First(item => item.GetProperty("attribution").GetString() == "unexpected");
+JsonElement[] related = findings.RootElement.GetProperty("members").EnumerateArray()
+    .Where(item => item.GetProperty("attribution").GetString() == "unexpected"
+        && item.GetProperty("memberName").GetString() != member.GetProperty("memberName").GetString())
+    .ToArray();
 var patches = new[] { new ChangedFilePatch(args[1], File.ReadAllText(args[2])) };
 
 ExplanationAttempt attempt;
 using (var explainer = new AnthropicExplainer(apiKey))
 {
-    attempt = await explainer.ExplainWithDiagnosticsAsync(member, patches);
+    attempt = await explainer.ExplainWithDiagnosticsAsync(member, patches, related);
 }
 
 Console.WriteLine("=== RAW ANTHROPIC RESPONSE ===");

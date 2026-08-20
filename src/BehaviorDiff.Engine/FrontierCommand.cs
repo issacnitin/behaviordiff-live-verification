@@ -377,10 +377,16 @@ namespace BehaviorDiff.Engine
                     + "' traced='" + (tracePaths.FirstOrDefault() ?? "<none>") + "'.");
             }
 
-            // The edited code produced no observable events, so nothing can be attributed to it. Every node
-            // would be reported as an UNEXPECTED change in an unedited file, which reads as a confident
-            // finding about code that was never the subject. That is worse than reporting nothing.
-            bool unattributable = changed.Count > 0 && nodes.Count > 0 && exactMatches == 0;
+            // A declarative options file can be present in the manifest while every member is deliberately
+            // excluded by MethodSelector. In that narrow case the zero-call footprint is itself explained;
+            // downstream frontiers remain useful. Missing manifest coverage and every other skip reason refuse.
+            bool intentionallyUntraced = AreChangedFilesIntentionallyUntraced(set, changed);
+            if (changed.Count > 0 && exactMatches == 0 && intentionallyUntraced)
+            {
+                Console.WriteLine("  all edited members were intentionally skipped as properties or type initializers");
+            }
+
+            bool unattributable = changed.Count > 0 && nodes.Count > 0 && exactMatches == 0 && !intentionallyUntraced;
             if (unattributable)
             {
                 var reasons = new List<string>();
@@ -585,6 +591,35 @@ namespace BehaviorDiff.Engine
             string simple = dot < 0 ? qualified : qualified.Substring(dot + 1);
             int tick = simple.IndexOf('`');
             return tick < 0 ? simple : simple.Substring(0, tick);
+        }
+
+        private static bool AreChangedFilesIntentionallyUntraced(
+            DivergenceSetFile set,
+            IReadOnlyCollection<string> changedFiles)
+        {
+            if (changedFiles.Count == 0)
+            {
+                return false;
+            }
+
+            foreach (string file in changedFiles)
+            {
+                string stem = Path.GetFileNameWithoutExtension(file);
+                CoverageMemberDto[] members = set.Coverage.Members
+                    .Where(member => member.MethodFullName != null
+                        && string.Equals(
+                            DeclaringTypeSimpleName(member.MethodFullName!),
+                            stem,
+                            StringComparison.Ordinal))
+                    .ToArray();
+                if (members.Length == 0 || members.Any(member => member.Status != "Skipped"
+                    || (member.SkipReason != "PropertyOrOperator" && member.SkipReason != "TypeInitializer")))
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         internal static HashSet<string> LoadChangedFiles(string path)

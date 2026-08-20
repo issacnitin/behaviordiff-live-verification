@@ -12,7 +12,7 @@
 [CmdletBinding()]
 param(
     [switch]$Mutate,
-    [ValidateSet('discount', 'enum', 'retry', 'config', 'downgrade')]
+    [ValidateSet('discount', 'partition', 'retry', 'config', 'downgrade')]
     [string]$Change = 'discount',
     [switch]$SkipPrRebuild,
     [string]$WorkDirectory,
@@ -69,12 +69,11 @@ if (-not $SkipPrRebuild) {
         Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 
     if ($Mutate) {
-        if ($Change -eq 'enum') {
-            $target = Join-Path $prTree 'samples/SampleApp/AccountStatus.cs'
+        if ($Change -eq 'partition') {
+            $target = Join-Path $prTree 'samples/SampleApp/PartitioningOptions.cs'
             $text = Get-Content $target -Raw
-            $mutated = $text -replace '        Suspended = 2,', "        Frozen = 2,`r`n        Suspended = 3,"
-            $mutated = $mutated -replace '        Closed = 3,', '        Closed = 4,'
-            $label = 'AccountStatus inserts Frozen before Suspended and Closed'
+            $mutated = $text -replace 's_partitionKeySelector = KeySelector\.CustomerId;', 's_partitionKeySelector = KeySelector.OrderId;'
+            $label = 'PartitioningOptions routes by orderId to avoid hot partitions'
         }
         elseif ($Change -eq 'retry') {
             $target = Join-Path $prTree 'samples/SampleApp/ConfigParser.cs'
@@ -138,7 +137,7 @@ $base2Exit = Invoke-Suite $baseBin (Join-Path $work 'base_run2')
 if ($base2Exit -ne 0) { throw "base_run2 tests failed: $base2Exit" }
 Write-Host '  base_run2 done'
 $prExit = Invoke-Suite $prBin (Join-Path $work 'pr_run')
-$expectedPrExit = if ($Mutate -and $Change -in @('enum', 'retry', 'config', 'downgrade')) { 1 } else { 0 }
+$expectedPrExit = if ($Mutate -and $Change -in @('partition', 'retry', 'config', 'downgrade')) { 1 } else { 0 }
 if ($prExit -ne $expectedPrExit) {
     throw "pr_run test exit was $prExit, expected $expectedPrExit for change '$Change'"
 }

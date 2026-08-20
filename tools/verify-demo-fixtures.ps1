@@ -2,15 +2,19 @@
 $ErrorActionPreference = 'Stop'
 $cases = @(
     @{
-        Change = 'enum'
-        ChangedFile = 'samples/SampleApp/AccountStatus.cs'
-        Headline = 'SampleApp.AccessControl.CanWithdraw(SampleApp.AccountStatus)'
-        DivergedKeys = 3
-        FrontierNodes = 2
-        ChangedCallSites = 3
-        ChangedCalls = 6
-        HeadlineCallSites = 2
-        UntestedCallSites = 1
+        Change = 'partition'
+        ChangedFile = 'samples/SampleApp/PartitioningOptions.cs'
+        Headline = 'SampleApp.PartitionRouter.PartitionFor(SampleApp.OrderEvent)'
+        DivergedKeys = 12
+        FrontierNodes = 9
+        FrontierVerified = 5
+        ChangedFileExercised = $false
+        ChangedTracedMembers = 0
+        ChangedCallSites = 0
+        ChangedCalls = 0
+        HeadlineCallSites = 3
+        UntestedCallSites = 2
+        UnexpectedMembers = 4
     }
     @{
         Change = 'retry'
@@ -18,10 +22,14 @@ $cases = @(
         Headline = 'SampleApp.RetryPolicy.ShouldRetry(System.Int32,System.Int32)'
         DivergedKeys = 5
         FrontierNodes = 2
+        FrontierVerified = 2
         ChangedCallSites = 2
         ChangedCalls = 4
+        ChangedFileExercised = $true
+        ChangedTracedMembers = 1
         HeadlineCallSites = 2
         UntestedCallSites = 1
+        UnexpectedMembers = 1
     }
     @{
         Change = 'config'
@@ -29,10 +37,14 @@ $cases = @(
         Headline = 'SampleApp.ShippingCalculator.IsFreeShipping(System.Decimal)'
         DivergedKeys = 6
         FrontierNodes = 2
+        FrontierVerified = 2
         ChangedCallSites = 5
         ChangedCalls = 10
+        ChangedFileExercised = $true
+        ChangedTracedMembers = 1
         HeadlineCallSites = 2
         UntestedCallSites = 1
+        UnexpectedMembers = 1
     }
 )
 
@@ -63,10 +75,11 @@ foreach ($case in $cases) {
     }
 
     $coverage = $findings.coverage.files | Where-Object filePath -eq $case.ChangedFile
-    if ($null -eq $coverage -or -not $coverage.exercised -or $coverage.tracedMembers -ne 1 `
+    if ($null -eq $coverage -or $coverage.exercised -ne $case.ChangedFileExercised `
+        -or $coverage.tracedMembers -ne $case.ChangedTracedMembers `
         -or $coverage.observedCallSites -ne $case.ChangedCallSites `
         -or $coverage.totalCallCount -ne $case.ChangedCalls) {
-        throw "$($case.Change): edited parser trace identity changed: $($coverage | ConvertTo-Json -Compress)"
+        throw "$($case.Change): edited-file trace identity changed: $($coverage | ConvertTo-Json -Compress)"
     }
 
     if ($frontier.counts.expected -ne 0) {
@@ -75,8 +88,8 @@ foreach ($case in $cases) {
 
     if ($frontier.counts.divergedKeys -ne $case.DivergedKeys `
         -or $frontier.counts.frontierNodes -ne $case.FrontierNodes `
-        -or $frontier.counts.frontierVerified -ne $case.FrontierNodes `
-        -or $frontier.counts.frontierUnverified -ne 0) {
+        -or $frontier.counts.frontierVerified -ne $case.FrontierVerified `
+        -or $frontier.counts.frontierUnverified -ne ($case.FrontierNodes - $case.FrontierVerified)) {
         throw "$($case.Change): topology drifted: $($frontier.counts | ConvertTo-Json -Compress)"
     }
 
@@ -110,9 +123,9 @@ foreach ($case in $cases) {
         -or $finding.untestedCallSiteCount -ne $case.UntestedCallSites) {
         throw "$($case.Change): canonical findings lost the untested headline evidence"
     }
-    if ($findings.summary.unexpectedMembers -ne 1 `
+    if ($findings.summary.unexpectedMembers -ne $case.UnexpectedMembers `
         -or $findings.summary.expectedMembers -ne 0 `
-        -or @($findings.members | Where-Object attribution -eq 'unexpected').Count -ne 1) {
+        -or @($findings.members | Where-Object attribution -eq 'unexpected').Count -ne $case.UnexpectedMembers) {
         throw "$($case.Change): canonical member rollup drifted: $($findings.summary | ConvertTo-Json -Compress)"
     }
 
@@ -121,7 +134,10 @@ foreach ($case in $cases) {
     if ($LASTEXITCODE -ne 0) { throw "$($case.Change): comment preview failed: $LASTEXITCODE" }
     $comment = $commentOutput -join "`n"
     $comment | Set-Content (Join-Path $work 'comment.md')
-    if ($comment -notmatch '^## BehaviorDiff: 1 behavior change outside this diff' `
+    $changeWord = if ($case.UnexpectedMembers -eq 1) { 'change' } else { 'changes' }
+    $expectedHeading = '^## BehaviorDiff: {0} behavior {1} outside this diff' -f `
+        $case.UnexpectedMembers, $changeWord
+    if ($comment -notmatch $expectedHeading `
         -or $comment -notmatch '<details><summary>Why, and the evidence</summary>' `
         -or $comment -match 'Unexpected means' `
         -or $comment -match 'k__BackingField') {
@@ -165,44 +181,64 @@ foreach ($case in $cases) {
         }
     }
 
-    if ($case.Change -eq 'enum') {
+    if ($case.Change -eq 'partition') {
         if ($finding.assertionReactionSummary -ne '3 tests executed this; 1 test had an assertion react.' `
-            -or $comment -notmatch 'AccessControl\.CanWithdraw.*changed, but this PR didn''t edit it' `
-            -or $comment -notmatch 'A suspended account can now withdraw' `
-            -or $comment -notmatch 'One of the 3 tests that executed this did not assert on the change' `
-            -or $comment -notmatch '_1 of 1 edited files exercised') {
-            throw 'enum: concise consequence-first comment drifted'
+            -or $comment -notmatch 'PartitionRouter\.PartitionFor.*changed, but this PR didn''t edit it' `
+            -or $comment -notmatch 'Order-based routing lets a debit overtake its credit' `
+            -or $comment -notmatch 'customer keeps 500 they should have paid' `
+            -or $comment -notmatch '2 of the 3 tests that executed this did not assert on the change' `
+            -or $comment -notmatch '_0 of 1 edited files exercised') {
+            throw 'partition: concise consequence-first comment drifted'
         }
 
-        $closedEvidence = @($finding.evidence | Where-Object {
-            $_.testId -like '*Closed_account_cannot_withdraw' `
-                -and $_.baseArgs -eq 'status=Primitive:AccountStatus.Closed' `
-                -and $_.prArgs -eq 'status=Primitive:AccountStatus.Suspended' `
-                -and $_.baseReturn -eq 'Primitive:false' `
-                -and $_.prReturn -eq 'Primitive:false' `
+        $debitRoutes = @($finding.evidence | Where-Object {
+            $_.ordinal -eq 1 `
+                -and $_.baseReturn -eq 'Primitive:3' `
+                -and $_.prReturn -eq 'Primitive:7'
+        })
+        if ($debitRoutes.Count -ne 3) {
+            throw 'partition: debit did not move deterministically from partition 3 to partition 7 in all tests'
+        }
+
+        $creditRoutes = @($finding.evidence | Where-Object {
+            $_.ordinal -eq 0 `
+                -and $_.baseReturn -eq 'Primitive:3' `
+                -and $_.prReturn -eq 'Primitive:9'
+        })
+        if ($creditRoutes.Count -ne 3) {
+            throw 'partition: credit did not move deterministically from partition 3 to partition 9 in all tests'
+        }
+
+        $current = $findings.members | Where-Object memberName -eq 'SampleApp.BalanceProjection.Current()'
+        $partialOracle = @($current.evidence | Where-Object {
+            $_.testId -like '*Balance_is_never_negative' `
+                -and $_.baseReturn -match 'Amount=500' `
+                -and $_.baseReturn -match 'RejectedDebits=0' `
+                -and $_.prReturn -match 'Amount=1000' `
+                -and $_.prReturn -match 'RejectedDebits=1' `
                 -and $_.assertionReacted -eq $false
         })
-        if ($closedEvidence.Count -ne 1) {
-            throw 'enum: closed account partial oracle was not retained'
+        if ($partialOracle.Count -ne 1) {
+            throw 'partition: passing non-negative assertion did not retain the silently dropped debit evidence'
         }
 
-        $suspendedEvidence = @($finding.evidence | Where-Object {
-            $_.testId -like '*Suspended_account_cannot_withdraw' `
-                -and $_.baseArgs -eq 'status=Primitive:AccountStatus.Suspended' `
-                -and $_.prArgs -eq 'status=Primitive:AccountStatus.Frozen' `
-                -and $_.baseReturn -eq 'Primitive:false' `
-                -and $_.prReturn -eq 'Primitive:true' `
+        $caughtOracle = @($current.evidence | Where-Object {
+            $_.testId -like '*Balance_after_credit_and_debit' `
+                -and $_.baseReturn -match 'Amount=500' `
+                -and $_.prReturn -match 'Amount=1000' `
                 -and $_.assertionReacted -eq $true
         })
-        if ($suspendedEvidence.Count -ne 1) {
-            throw 'enum: suspended account did not change from blocked to allowed'
+        if ($caughtOracle.Count -ne 1) {
+            throw 'partition: failing final-balance assertion did not retain the 500 to 1000 consequence'
         }
 
-        $executingTests = @($divergences.callTree | Where-Object {
-            $_.methodFullName -eq $case.Headline
-        } | Select-Object -ExpandProperty testId -Unique)
-        if ($executingTests.Count -ne 3) {
-            throw "enum: expected three tests to execute CanWithdraw, got $($executingTests.Count)"
+        $skipped = @($divergences.coverage.members | Where-Object {
+            $_.methodFullName -like 'SampleApp.PartitioningOptions.*'
+        })
+        if (@($skipped | Where-Object skipReason -eq 'PropertyOrOperator').Count -ne 2 `
+            -or @($skipped | Where-Object skipReason -eq 'TypeInitializer').Count -ne 1 `
+            -or @($skipped | Where-Object status -ne 'Skipped').Count -ne 0) {
+            throw 'partition: edited options file was not skipped solely as properties and type initializer'
         }
     }
 
@@ -216,7 +252,7 @@ foreach ($case in $cases) {
         throw 'config: concise comment lost the free-shipping consequence lead'
     }
 
-        Write-Host "PASS: edited file was exercised but left no divergence/frontier footprint" -ForegroundColor Green
+        Write-Host "PASS: edited file left no traced divergence/frontier footprint" -ForegroundColor Green
         Write-Host ("PASS: {0} diverged keys -> {1} frontier node(s) ({2:N1}x)" -f `
             $frontier.counts.divergedKeys, $frontier.counts.frontierNodes, $ratio) -ForegroundColor Green
         Write-Host "PASS: $($case.Headline) has untested: True" -ForegroundColor Green

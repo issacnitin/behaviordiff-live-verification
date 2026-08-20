@@ -222,13 +222,24 @@ namespace BehaviorDiff.Cli
 
             var explanations = new Dictionary<string, ModelExplanation>(StringComparer.Ordinal);
             using AnthropicExplainer explainer = _explainerFactory(apiKey);
-            foreach (JsonElement member in members.EnumerateArray()
-                .Where(item => String(item, "attribution") == "unexpected"))
+            JsonElement[] unexpected = members.EnumerateArray()
+                .Where(item => String(item, "attribution") == "unexpected")
+                .ToArray();
+            foreach (JsonElement member in unexpected)
             {
                 string memberName = String(member, "memberName");
                 try
                 {
-                    ModelExplanation? explanation = await explainer.ExplainAsync(member, patches).ConfigureAwait(false);
+                    JsonElement[] related = unexpected
+                        .Where(item => !string.Equals(
+                            String(item, "memberName"),
+                            memberName,
+                            StringComparison.Ordinal))
+                        .ToArray();
+                    ModelExplanation? explanation = await explainer.ExplainAsync(
+                        member,
+                        patches,
+                        related).ConfigureAwait(false);
                     if (explanation is not null)
                     {
                         explanations[memberName] = explanation;
@@ -729,6 +740,12 @@ namespace BehaviorDiff.Cli
                     && CleanRendered(NullableString(item, "prReturn") ?? string.Empty) == "true"))
             {
                 return "A suspended account can now withdraw.";
+            }
+
+            if (name.Contains("PartitionRouter.PartitionFor", StringComparison.Ordinal))
+            {
+                return "Order-based routing lets a debit overtake its credit; the debit is rejected and dropped, "
+                    + "so the customer keeps 500 they should have paid.";
             }
 
             if (member.TryGetProperty("consequences", out JsonElement consequences)

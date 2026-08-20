@@ -2,7 +2,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [ValidateSet('retry', 'permission', 'config')]
+    [ValidateSet('partition', 'retry', 'permission', 'config')]
     [string]$Change
 )
 
@@ -33,6 +33,11 @@ $runId = [Guid]::NewGuid().ToString('N')
 $prTree = Join-Path ([IO.Path]::GetTempPath()) "behaviordiff-live-pr-$runId"
 $work = Join-Path ([IO.Path]::GetTempPath()) "behaviordiff-live-$runId"
 $case = switch ($Change) {
+    'partition' { @{
+        File = 'samples/SampleApp/PartitioningOptions.cs'
+        Base = 's_partitionKeySelector = KeySelector.CustomerId;'
+        Pr = 's_partitionKeySelector = KeySelector.OrderId;'
+    } }
     'retry' { @{
         File = 'samples/SampleApp/ConfigParser.cs'
         Base = 'RetrySettings.MaxAttempts = int.Parse(raw["max_attempts"], CultureInfo.InvariantCulture);'

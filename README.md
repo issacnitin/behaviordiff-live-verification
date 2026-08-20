@@ -26,17 +26,20 @@ The finding that matters is the one in a file the pull request never touched.
 
 ## The demo
 
-**Primary — persisted enum reordering.** `AccountStatus.cs` assigns `Suspended = 2` and `Closed = 3`.
-The one edited file inserts `Frozen = 2` and shifts the later values. `AccountRepository.cs` persists
-the enum as an integer, so seed data written under the base meaning is silently reinterpreted after the
-PR: stored `2` becomes `Frozen`, and the unedited `AccessControl.CanWithdraw` starts allowing a suspended
-account to withdraw. The active-account test remains green, the closed-account test remains green for
-the wrong reason because stored `3` now means `Suspended`, and the suspended-account test catches the
-regression. The write is already durable, so redeploying the old code does not repair rewritten data.
+**Primary — partition-ordering regression.** The only edited file, `PartitioningOptions.cs`, changes the
+partition key from customer ID to order ID to avoid hot partitions. Its properties and type initializer
+are deliberately skipped by the tracer, so it contributes zero traced members or calls. In unedited code,
+two events for one customer now enter different partitions: the debit drains before its credit, is rejected
+for insufficient funds, and is dropped. The customer retains 1000 instead of paying 500. The publish-count
+test stays green, the non-negative-balance test stays green precisely because the debit vanished, and the
+final-balance test catches the regression.
 
 ```powershell
-pwsh -File tools/verify-diff.ps1 -Mutate -Change enum
+pwsh -File tools/verify-diff.ps1 -Mutate -Change partition
 ```
+
+The deterministic run reports 12 diverged keys collapsed to nine frontier call sites. The headline is
+the unedited `PartitionRouter.PartitionFor`: all three tests execute it, while two have no assertion react.
 
 **Secondary — payment retry regression.** `payment-config.json` omits `max_attempts`, so the base
 `ConfigParser.cs` resolves the inherited value `10`. The one edited line replaces that lookup with a
@@ -64,9 +67,9 @@ its six diverged keys collapse to two call-site frontiers for one unexpected mem
 pwsh -File tools/verify-diff.ps1 -Mutate -Change config
 ```
 
-All three demo modes enforce the same constraints in one proof: the edited parser is exercised but has
-no divergence/frontier footprint, collapse is above `1x`, and the headline has an `untested: True`
-observation.
+All three demo modes enforce the same constraints in one proof: exactly one edited file has no
+divergence/frontier footprint, collapse is above `1x`, and the headline has an `untested: True`
+observation. The partition mode additionally proves that the edited file has zero traced members and calls.
 
 ```powershell
 pwsh -File tools/verify-demo-fixtures.ps1
@@ -79,7 +82,7 @@ New-Item "$HOME/.behaviordiff" -ItemType Directory -Force | Out-Null
 Read-Host -AsSecureString 'Anthropic API key' |
    ConvertFrom-SecureString |
    Set-Content "$HOME/.behaviordiff/anthropic.key"
-pwsh -File tools/run-real-explainer.ps1 -Change retry
+pwsh -File tools/run-real-explainer.ps1 -Change partition
 ```
 
 The command prints the raw Messages API response, the unchanged literal/citation validation verdict,
@@ -268,7 +271,7 @@ pwsh -File tools/verify-ci-refs.ps1          # merge-base refs and invalid findi
 pwsh -File tools/verify-github-refs.ps1      # event SHAs and shallow-clone refusal
 pwsh -File tools/verify-coverage.ps1         # values, paths, assertion reaction, and coverage honesty
 pwsh -File tools/verify-anthropic.ps1        # one request/member and grounded-output rejection
-pwsh -File tools/verify-demo-fixtures.ps1    # retry, permission, config constraints
+pwsh -File tools/verify-demo-fixtures.ps1    # partition, retry, config constraints
 pwsh -File tools/verify-mcp.ps1              # MCP reads canonical findings.json
 pwsh -File tools/verify-ado-post.ps1         # local ADO REST contract and idempotency
 pwsh -File tools/verify-pipeline.ps1         # mocked end-to-end CI seams

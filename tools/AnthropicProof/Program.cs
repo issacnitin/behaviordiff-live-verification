@@ -75,6 +75,50 @@ Assert(acceptedHandler.LastRequestBody.Contains("do not restate them", StringCom
 Assert(acceptedHandler.LastRequestBody.Contains("do not mention returns", StringComparison.Ordinal), "prompt does not prohibit outcome restatement");
 Assert(acceptedHandler.SawApiKey && acceptedHandler.SawVersion, "required Anthropic headers missing");
 
+JsonElement relatedObservation = member.GetProperty("evidence").EnumerateArray().First();
+string relatedCitation = "RELATED: member=" + member.GetProperty("memberName").GetString()
+    + "; test=" + relatedObservation.GetProperty("testId").GetString()
+    + "; baseArgs=" + relatedObservation.GetProperty("baseArgs").GetString()
+    + "; prArgs=" + relatedObservation.GetProperty("prArgs").GetString()
+    + "; baseReturn=" + relatedObservation.GetProperty("baseReturn").GetString()
+    + "; prReturn=" + relatedObservation.GetProperty("prReturn").GetString();
+string relatedAcceptedText = JsonSerializer.Serialize(new
+{
+    why = new
+    {
+        text = "The PR changes DefaultFreeShippingThreshold, which is consumed by the unedited IsFreeShipping predicate.",
+        citations = whyCitations.Append(relatedCitation).ToArray(),
+    },
+    test = new
+    {
+        text = "Add a test that applies the default settings, calls IsFreeShipping with 40, and expects false; it passes on base and fails on the PR because the result is true.",
+        citations = new[] { observationCitation },
+    },
+});
+var relatedAcceptedHandler = new FakeHandler(Response(relatedAcceptedText));
+using (var explainer = new AnthropicExplainer(
+    "proof-key",
+    relatedAcceptedHandler,
+    "https://example.invalid/v1/messages",
+    "claude-sonnet-5"))
+{
+    ModelExplanation? relatedAccepted = await explainer.ExplainAsync(member, patches, new[] { member });
+    Assert(relatedAccepted is not null, "response with an exact related-frontier citation was rejected");
+    Assert(relatedAcceptedHandler.LastRequestBody.Contains("relatedFrontiers", StringComparison.Ordinal),
+        "related frontier evidence was omitted from the prompt");
+}
+
+var missingRelatedHandler = new FakeHandler(Response(acceptedText));
+using (var explainer = new AnthropicExplainer(
+    "proof-key",
+    missingRelatedHandler,
+    "https://example.invalid/v1/messages",
+    "claude-sonnet-5"))
+{
+    ExplanationAttempt missingRelated = await explainer.ExplainWithDiagnosticsAsync(member, patches, new[] { member });
+    Assert(missingRelated.Explanation is null, "response without a required related-frontier citation was accepted");
+}
+
 string rejectedText = JsonSerializer.Serialize(new
 {
     why = new
@@ -413,6 +457,7 @@ Console.WriteLine(withKey);
 Console.WriteLine();
 Console.WriteLine("PASS: one request per unexpected member");
 Console.WriteLine("PASS: prompt contains observations, paths, assertion reaction, and diff hunk");
+Console.WriteLine("PASS: related frontier evidence requires an exact citation");
 Console.WriteLine("PASS: missing/wrong-case literals and fabricated citations are rejected");
 Console.WriteLine("PASS: raw non-success and malformed responses survive diagnostic validation");
 Console.WriteLine("PASS: deterministic post precedes enrichment and the same comment is patched");
