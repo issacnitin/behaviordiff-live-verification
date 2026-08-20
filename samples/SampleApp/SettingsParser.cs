@@ -10,7 +10,7 @@ namespace SampleApp
     /// </summary>
     public static class SettingsParser
     {
-        private const decimal DefaultFreeShippingThreshold = 50m;
+        private const decimal DefaultFreeShippingThreshold = 30m;
 
         /// <summary>
         /// Parsing is inline rather than in a helper on purpose: a private helper is patched like any
