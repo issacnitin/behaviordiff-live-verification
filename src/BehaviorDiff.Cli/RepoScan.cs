@@ -34,6 +34,9 @@ namespace BehaviorDiff.Cli
         private static readonly Regex DebugType =
             new(@"<DebugType>\s*([^<\s]+)\s*</DebugType>", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+        private static readonly Regex Excluded =
+            new(@"<BehaviorDiffExclude>\s*true\s*</BehaviorDiffExclude>", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
         /// <summary>
         /// Identifies which projects the tracer must reach and whether anything would defeat Step 0.
         /// </summary>
@@ -63,11 +66,16 @@ namespace BehaviorDiff.Cli
                 bool isXunit = packages.Contains("xunit") || packages.Contains("xunit.core") || packages.Contains("xunit.v3");
                 bool isNUnit = packages.Contains("NUnit");
                 bool isMsTest = packages.Contains("MSTest.TestFramework") || packages.Contains("MSTest");
+                bool isExcluded = Excluded.IsMatch(text);
 
                 // Microsoft.NET.Test.Sdk is what makes a project a test project. A library that merely
                 // references xunit.core - a test helper or an extension to the framework itself - would
                 // otherwise get the tracer injected into it, which patches and traces a non-test assembly.
-                if (isTestHost && isXunit)
+                if (isTestHost && isExcluded)
+                {
+                    result.OtherFrameworks.Add(new TestProject { Path = project, Framework = "explicitly excluded" });
+                }
+                else if (isTestHost && isXunit)
                 {
                     result.XunitProjects.Add(new TestProject { Path = project, Framework = packages.Contains("xunit.v3") ? "xunit.v3" : "xunit" });
                 }

@@ -6,6 +6,8 @@
     <AssemblyName>SampleApp.NoPdb.Tests</AssemblyName>
     <IsPackable>false</IsPackable>
     <DebugType>portable</DebugType>
+    <!-- This intentionally invalid fixture is run only by verify-negative-tests.ps1. -->
+    <BehaviorDiffExclude>true</BehaviorDiffExclude>
   </PropertyGroup>
 
   <ItemGroup>
