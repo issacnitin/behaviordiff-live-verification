@@ -2,7 +2,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [ValidateSet('partition', 'retry', 'permission', 'config')]
+    [ValidateSet('cache', 'retry', 'permission', 'config')]
     [string]$Change
 )
 
@@ -33,10 +33,10 @@ $runId = [Guid]::NewGuid().ToString('N')
 $prTree = Join-Path ([IO.Path]::GetTempPath()) "behaviordiff-live-pr-$runId"
 $work = Join-Path ([IO.Path]::GetTempPath()) "behaviordiff-live-$runId"
 $case = switch ($Change) {
-    'partition' { @{
-        File = 'samples/SampleApp/PartitioningOptions.cs'
-        Base = 's_partitionKeySelector = KeySelector.CustomerId;'
-        Pr = 's_partitionKeySelector = KeySelector.OrderId;'
+    'cache' { @{
+        File = 'samples/SampleApp/CacheSettings.cs'
+        Base = 's_priceCacheKeyFields = PriceCacheKeyFields.ProductId | PriceCacheKeyFields.CustomerTier;'
+        Pr = 's_priceCacheKeyFields = PriceCacheKeyFields.ProductId;'
     } }
     'retry' { @{
         File = 'samples/SampleApp/ConfigParser.cs'

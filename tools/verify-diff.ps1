@@ -12,7 +12,7 @@
 [CmdletBinding()]
 param(
     [switch]$Mutate,
-    [ValidateSet('discount', 'partition', 'retry', 'config', 'downgrade')]
+    [ValidateSet('discount', 'cache', 'retry', 'config', 'downgrade')]
     [string]$Change = 'discount',
     [switch]$SkipPrRebuild,
     [string]$WorkDirectory,
@@ -69,11 +69,11 @@ if (-not $SkipPrRebuild) {
         Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 
     if ($Mutate) {
-        if ($Change -eq 'partition') {
-            $target = Join-Path $prTree 'samples/SampleApp/PartitioningOptions.cs'
+        if ($Change -eq 'cache') {
+            $target = Join-Path $prTree 'samples/SampleApp/CacheSettings.cs'
             $text = Get-Content $target -Raw
-            $mutated = $text -replace 's_partitionKeySelector = KeySelector\.CustomerId;', 's_partitionKeySelector = KeySelector.OrderId;'
-            $label = 'PartitioningOptions routes by orderId to avoid hot partitions'
+            $mutated = $text -replace 'PriceCacheKeyFields\.ProductId \| PriceCacheKeyFields\.CustomerTier', 'PriceCacheKeyFields.ProductId'
+            $label = 'CacheSettings simplifies the price cache key to improve hit rate'
         }
         elseif ($Change -eq 'retry') {
             $target = Join-Path $prTree 'samples/SampleApp/ConfigParser.cs'
@@ -137,7 +137,7 @@ $base2Exit = Invoke-Suite $baseBin (Join-Path $work 'base_run2')
 if ($base2Exit -ne 0) { throw "base_run2 tests failed: $base2Exit" }
 Write-Host '  base_run2 done'
 $prExit = Invoke-Suite $prBin (Join-Path $work 'pr_run')
-$expectedPrExit = if ($Mutate -and $Change -in @('partition', 'retry', 'config', 'downgrade')) { 1 } else { 0 }
+$expectedPrExit = if ($Mutate -and $Change -in @('cache', 'retry', 'config', 'downgrade')) { 1 } else { 0 }
 if ($prExit -ne $expectedPrExit) {
     throw "pr_run test exit was $prExit, expected $expectedPrExit for change '$Change'"
 }

@@ -2,19 +2,19 @@
 $ErrorActionPreference = 'Stop'
 $cases = @(
     @{
-        Change = 'partition'
-        ChangedFile = 'samples/SampleApp/PartitioningOptions.cs'
-        Headline = 'SampleApp.PartitionRouter.PartitionFor(SampleApp.OrderEvent)'
-        DivergedKeys = 12
+        Change = 'cache'
+        ChangedFile = 'samples/SampleApp/CacheSettings.cs'
+        Headline = 'SampleApp.PriceCache.BuildKey(System.Int32,System.String)'
+        DivergedKeys = 14
         FrontierNodes = 9
-        FrontierVerified = 5
+        FrontierVerified = 7
         ChangedFileExercised = $false
         ChangedTracedMembers = 0
         ChangedCallSites = 0
         ChangedCalls = 0
         HeadlineCallSites = 3
         UntestedCallSites = 2
-        UnexpectedMembers = 4
+        UnexpectedMembers = 3
     }
     @{
         Change = 'retry'
@@ -181,64 +181,67 @@ foreach ($case in $cases) {
         }
     }
 
-    if ($case.Change -eq 'partition') {
+    if ($case.Change -eq 'cache') {
         if ($finding.assertionReactionSummary -ne '3 tests executed this; 1 test had an assertion react.' `
-            -or $comment -notmatch 'PartitionRouter\.PartitionFor.*changed, but this PR didn''t edit it' `
-            -or $comment -notmatch 'Order-based routing lets a debit overtake its credit' `
-            -or $comment -notmatch 'customer keeps 500 they should have paid' `
+            -or $comment -notmatch 'PriceCache\.BuildKey.*changed, but this PR didn''t edit it' `
+            -or $comment -notmatch 'BuildKey returned "P:123\|T:Standard", now returns "P:123"' `
+            -or $comment -notmatch 'PricingService\.GetPrice returned 100, now returns 80' `
             -or $comment -notmatch '2 of the 3 tests that executed this did not assert on the change' `
             -or $comment -notmatch '_0 of 1 edited files exercised') {
-            throw 'partition: concise consequence-first comment drifted'
+            throw 'cache: concise consequence-first comment drifted'
         }
 
-        $debitRoutes = @($finding.evidence | Where-Object {
+        $standardKeys = @($finding.evidence | Where-Object {
             $_.ordinal -eq 1 `
-                -and $_.baseReturn -eq 'Primitive:3' `
-                -and $_.prReturn -eq 'Primitive:7'
+                -and $_.baseArgs -eq 'productId=Primitive:123, customerTier=Primitive:"Standard"' `
+                -and $_.prArgs -eq 'productId=Primitive:123, customerTier=Primitive:"Standard"' `
+                -and $_.baseReturn -eq 'Primitive:"P:123|T:Standard"' `
+                -and $_.prReturn -eq 'Primitive:"P:123"'
         })
-        if ($debitRoutes.Count -ne 3) {
-            throw 'partition: debit did not move deterministically from partition 3 to partition 7 in all tests'
+        if ($standardKeys.Count -ne 2) {
+            throw 'cache: Standard key did not deterministically lose CustomerTier in both warmed-cache tests'
         }
 
-        $creditRoutes = @($finding.evidence | Where-Object {
-            $_.ordinal -eq 0 `
-                -and $_.baseReturn -eq 'Primitive:3' `
-                -and $_.prReturn -eq 'Primitive:9'
+        $goldKeys = @($finding.evidence | Where-Object {
+            $_.baseArgs -eq 'productId=Primitive:123, customerTier=Primitive:"Gold"' `
+                -and $_.prArgs -eq 'productId=Primitive:123, customerTier=Primitive:"Gold"' `
+                -and $_.baseReturn -eq 'Primitive:"P:123|T:Gold"' `
+                -and $_.prReturn -eq 'Primitive:"P:123"'
         })
-        if ($creditRoutes.Count -ne 3) {
-            throw 'partition: credit did not move deterministically from partition 3 to partition 9 in all tests'
+        if ($goldKeys.Count -ne 3) {
+            throw 'cache: Gold key did not deterministically lose CustomerTier in all tests'
         }
 
-        $current = $findings.members | Where-Object memberName -eq 'SampleApp.BalanceProjection.Current()'
-        $partialOracle = @($current.evidence | Where-Object {
-            $_.testId -like '*Balance_is_never_negative' `
-                -and $_.baseReturn -match 'Amount=500' `
-                -and $_.baseReturn -match 'RejectedDebits=0' `
-                -and $_.prReturn -match 'Amount=1000' `
-                -and $_.prReturn -match 'RejectedDebits=1' `
-                -and $_.assertionReacted -eq $false
+        $partialOracle = @($finding.consequences | Where-Object {
+            $_.memberName -eq 'SampleApp.PricingService.GetPrice(System.Int32,System.String)' `
+                -and $_.evidence.testId -like '*Price_is_never_negative' `
+                -and $_.evidence.baseReturn -eq 'Primitive:100' `
+                -and $_.evidence.prReturn -eq 'Primitive:80' `
+                -and $_.evidence.baseArgs -match 'customerTier=Primitive:"Standard"' `
+                -and $_.evidence.assertionReacted -eq $false
         })
         if ($partialOracle.Count -ne 1) {
-            throw 'partition: passing non-negative assertion did not retain the silently dropped debit evidence'
+            throw 'cache: positive-price partial oracle did not retain the wrong Standard price evidence'
         }
 
-        $caughtOracle = @($current.evidence | Where-Object {
-            $_.testId -like '*Balance_after_credit_and_debit' `
-                -and $_.baseReturn -match 'Amount=500' `
-                -and $_.prReturn -match 'Amount=1000' `
-                -and $_.assertionReacted -eq $true
+        $caughtOracle = @($finding.consequences | Where-Object {
+            $_.memberName -eq 'SampleApp.PricingService.GetPrice(System.Int32,System.String)' `
+                -and $_.evidence.testId -like '*Standard_customer_pays_full_price' `
+                -and $_.evidence.baseReturn -eq 'Primitive:100' `
+                -and $_.evidence.prReturn -eq 'Primitive:80' `
+                -and $_.evidence.assertionReacted -eq $true
         })
         if ($caughtOracle.Count -ne 1) {
-            throw 'partition: failing final-balance assertion did not retain the 500 to 1000 consequence'
+            throw 'cache: failing Standard-price assertion did not retain the 100 to 80 consequence'
         }
 
         $skipped = @($divergences.coverage.members | Where-Object {
-            $_.methodFullName -like 'SampleApp.PartitioningOptions.*'
+            $_.methodFullName -like 'SampleApp.CacheSettings.*'
         })
-        if (@($skipped | Where-Object skipReason -eq 'PropertyOrOperator').Count -ne 2 `
+        if (@($skipped | Where-Object skipReason -eq 'PropertyOrOperator').Count -ne 1 `
             -or @($skipped | Where-Object skipReason -eq 'TypeInitializer').Count -ne 1 `
             -or @($skipped | Where-Object status -ne 'Skipped').Count -ne 0) {
-            throw 'partition: edited options file was not skipped solely as properties and type initializer'
+            throw 'cache: edited settings file was not skipped solely as property and type initializer'
         }
     }
 

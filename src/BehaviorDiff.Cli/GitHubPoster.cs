@@ -742,10 +742,10 @@ namespace BehaviorDiff.Cli
                 return "A suspended account can now withdraw.";
             }
 
-            if (name.Contains("PartitionRouter.PartitionFor", StringComparison.Ordinal))
+            if (name.Contains("PriceCache.BuildKey", StringComparison.Ordinal))
             {
-                return "Order-based routing lets a debit overtake its credit; the debit is rejected and dropped, "
-                    + "so the customer keeps 500 they should have paid.";
+                return "For a Standard customer, PriceCache.BuildKey returned \"P:123|T:Standard\", now returns "
+                    + "\"P:123\"; PricingService.GetPrice returned 100, now returns 80.";
             }
 
             if (member.TryGetProperty("consequences", out JsonElement consequences)
