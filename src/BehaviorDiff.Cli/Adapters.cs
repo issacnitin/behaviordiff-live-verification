@@ -25,6 +25,8 @@ namespace BehaviorDiff.Cli
 
         internal List<(string Tfm, string Reason)> RejectedTfms { get; } = new();
 
+        internal bool UsesExistingTracerXunit { get; init; }
+
         /// <summary>
         /// The HIGHEST traceable framework. This used to be the lowest: Harmony could not emit on net9.0 or
         /// later, so the oldest target was the only one certain to be instrumentable. Cecil weaves at build
@@ -91,6 +93,9 @@ namespace BehaviorDiff.Cli
                 Path = projectPath,
                 XunitPackage = package,
                 XunitVersion = version,
+                UsesExistingTracerXunit = root.TryGetProperty("libraries", out JsonElement resolvedLibraries)
+                    && resolvedLibraries.EnumerateObject().Any(library =>
+                        library.Name.StartsWith("BehaviorDiff.Tracer.Xunit/", StringComparison.OrdinalIgnoreCase)),
             };
 
             if (root.TryGetProperty("project", out JsonElement project)
@@ -163,6 +168,11 @@ namespace BehaviorDiff.Cli
 
             foreach (ResolvedTestProject project in projects)
             {
+                if (project.UsesExistingTracerXunit)
+                {
+                    continue;
+                }
+
                 string directory = Path.Combine(root, project.Name);
                 Directory.CreateDirectory(directory);
 

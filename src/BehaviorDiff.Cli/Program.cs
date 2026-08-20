@@ -240,7 +240,9 @@ namespace BehaviorDiff.Cli
                 AdapterBuilder.BuildAll(Path.Combine(_work, "pr-adapters"), kit, prProjects);
                 foreach (ResolvedTestProject project in baseProjects)
                 {
-                    Console.WriteLine("  " + project.Name + " -> " + project.XunitPackage + " " + project.XunitVersion + " / " + project.TraceTfm);
+                    Console.WriteLine("  " + project.Name + " -> " + (project.UsesExistingTracerXunit
+                        ? "existing BehaviorDiff.Tracer.Xunit"
+                        : project.XunitPackage + " " + project.XunitVersion) + " / " + project.TraceTfm);
                 }
 
                 Console.WriteLine();
@@ -458,6 +460,13 @@ namespace BehaviorDiff.Cli
                         + prProject.TraceTfm + " in PR. Different frameworks instrument different members, "
                         + "so the comparison would report coverage differences as behavior differences.");
                 }
+
+                    if (baseProject.UsesExistingTracerXunit != prProject.UsesExistingTracerXunit)
+                    {
+                        throw new CliException(
+                        baseProject.Name + " references BehaviorDiff.Tracer.Xunit on only one side. "
+                        + "Different test-correlation adapters make base/PR traces incomparable.");
+                    }
             }
 
             Console.WriteLine("  base/PR trace framework symmetry: OK");
@@ -510,18 +519,23 @@ namespace BehaviorDiff.Cli
         {
             foreach (ResolvedTestProject project in projects)
             {
+                var arguments = new List<string>
+                {
+                    "build", project.Path, "-c", "Release", "--nologo", "-v", "quiet",
+                    "-p:DebugType=portable",
+                };
+                if (!project.UsesExistingTracerXunit)
+                {
+                    arguments.Add("-p:CustomAfterMicrosoftCommonTargets=" + Path.Combine(kit, "BehaviorDiff.Inject.targets"));
+                    arguments.Add("-p:BehaviorDiffKitDir=" + kit + Path.DirectorySeparatorChar);
+                    arguments.Add("-p:BehaviorDiffAdapterPath=" + project.AdapterAssemblyPath);
+                    arguments.Add("-p:BehaviorDiffTraceTfm=" + project.TraceTfm);
+                    arguments.Add("-p:BehaviorDiffTestProjects=" + project.Path);
+                }
+
                 ProcessResult result = Shell.Run(
                     "dotnet",
-                    new[]
-                    {
-                        "build", project.Path, "-c", "Release", "--nologo", "-v", "quiet",
-                        "-p:DebugType=portable",
-                        "-p:CustomAfterMicrosoftCommonTargets=" + Path.Combine(kit, "BehaviorDiff.Inject.targets"),
-                        "-p:BehaviorDiffKitDir=" + kit + Path.DirectorySeparatorChar,
-                        "-p:BehaviorDiffAdapterPath=" + project.AdapterAssemblyPath,
-                        "-p:BehaviorDiffTraceTfm=" + project.TraceTfm,
-                        "-p:BehaviorDiffTestProjects=" + project.Path,
-                    },
+                    arguments,
                     tree);
 
                 if (!result.Ok)
@@ -552,10 +566,13 @@ namespace BehaviorDiff.Cli
                 File.Copy(Path.Combine(kit, assembly), Path.Combine(output, assembly), overwrite: true);
             }
 
-            File.Copy(
-                project.AdapterAssemblyPath,
-                Path.Combine(output, Path.GetFileName(project.AdapterAssemblyPath)),
-                overwrite: true);
+            if (!project.UsesExistingTracerXunit)
+            {
+                File.Copy(
+                    project.AdapterAssemblyPath,
+                    Path.Combine(output, Path.GetFileName(project.AdapterAssemblyPath)),
+                    overwrite: true);
+            }
 
             string runtime = Path.Combine(kit, "runtime");
             if (Directory.Exists(runtime))
