@@ -132,6 +132,20 @@ changed file contributed a single traced member, or when path normalization fail
 
 ## Pull request pipeline
 
+**Azure DevOps is the leading review experience for the outside-diff demo.** A live disposable PR
+confirmed that `threadContext` accepts an unchanged file and shows the thread on the PR Overview page
+by default. Reviewers do not need to open the file manually. The `AccessControl.cs:8` thread remained
+active after a second source iteration, was returned when comparing iterations 1 and 2, and repeated
+BehaviorDiff posts updated the same thread/comment IDs instead of creating duplicates.
+
+The live proof used
+[`OnlineServices/BehaviorDiff-Thread-20260820-2128 PR 772049`](https://devdiv.visualstudio.com/OnlineServices/_git/BehaviorDiff-Thread-20260820-2128/pullrequest/772049):
+the PR changes only `AccountStatus.cs`; summary thread `9954025` has no file context; finding thread
+`9954026` targets the unedited `/samples/SampleApp/AccessControl.cs` at line 8. A dedicated throwaway
+project could not be created because the account lacks the organization-level `Create new projects`
+permission, so the test used a uniquely named disposable repository in the existing `OnlineServices`
+project and did not touch any existing repository.
+
 `azure-pipelines.yml` runs the same CLI used locally; there is no build-task extension. It resolves
 Azure DevOps PR refs with `--ci=azuredevops`, writes `findings.json`, posts the result, publishes that
 artifact, and deletes the large trace work directory after every job.
