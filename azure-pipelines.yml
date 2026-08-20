@@ -11,6 +11,7 @@ variables:
   behaviorDiffGate: warn-only
   behaviorDiffWork: $(Agent.TempDirectory)/behaviordiff-work
   behaviorDiffFindings: $(Build.ArtifactStagingDirectory)/behaviordiff/findings.json
+  behaviorDiffExcludeNamespaces: SampleApp.Diagnostics,SampleApp.Persistence
 
 steps:
   # Ref resolution needs both parents of ADO's synthetic PR merge commit and their merge base.
@@ -52,6 +53,7 @@ steps:
       $processInfo.RedirectStandardOutput = $true
       $processInfo.RedirectStandardError = $true
       $processInfo.UseShellExecute = $false
+      $processInfo.Environment['BEHAVIORDIFF_EXCLUDE_NAMESPACES'] = '$(behaviorDiffExcludeNamespaces)'
 
       $started = [DateTime]::UtcNow
       $process = [Diagnostics.Process]::Start($processInfo)

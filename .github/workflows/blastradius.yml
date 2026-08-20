@@ -15,6 +15,7 @@ jobs:
       BEHAVIORDIFF_WORK: ${{ github.workspace }}/../behaviordiff-work
       BEHAVIORDIFF_FINDINGS: ${{ github.workspace }}/.behaviordiff/artifacts/findings.json
       BEHAVIORDIFF_GATE: warn-only
+      BEHAVIORDIFF_EXCLUDE_NAMESPACES: SampleApp.Diagnostics,SampleApp.Persistence
 
     steps:
       - name: Check out complete history
