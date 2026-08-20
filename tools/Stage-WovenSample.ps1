@@ -33,7 +33,10 @@ foreach ($target in @(
     $dll = Join-Path $OutDir "$($target.Name).dll"
     if (-not (Test-Path $dll)) { continue }
 
-    $weaveArgs = @('--assembly', $dll, '--include', 'SampleApp', '--exclude', 'SampleApp.Diagnostics')
+    $weaveArgs = @(
+        '--assembly', $dll,
+        '--include', 'SampleApp',
+        '--exclude', 'SampleApp.Diagnostics,SampleApp.Persistence')
     if ($target.Test) { $weaveArgs += '--test-assembly' }
 
     $out = dotnet run --project $weaver -c Release -v quiet --no-build -- @weaveArgs 2>&1

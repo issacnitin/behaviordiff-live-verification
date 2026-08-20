@@ -26,7 +26,19 @@ The finding that matters is the one in a file the pull request never touched.
 
 ## The demo
 
-**Primary — payment retry regression.** `payment-config.json` omits `max_attempts`, so the base
+**Primary — persisted enum reordering.** `AccountStatus.cs` assigns `Suspended = 2` and `Closed = 3`.
+The one edited file inserts `Frozen = 2` and shifts the later values. `AccountRepository.cs` persists
+the enum as an integer, so seed data written under the base meaning is silently reinterpreted after the
+PR: stored `2` becomes `Frozen`, and the unedited `AccessControl.CanWithdraw` starts allowing a suspended
+account to withdraw. The active-account test remains green, the closed-account test remains green for
+the wrong reason because stored `3` now means `Suspended`, and the suspended-account test catches the
+regression. The write is already durable, so redeploying the old code does not repair rewritten data.
+
+```powershell
+pwsh -File tools/verify-diff.ps1 -Mutate -Change enum
+```
+
+**Secondary — payment retry regression.** `payment-config.json` omits `max_attempts`, so the base
 `ConfigParser.cs` resolves the inherited value `10`. The one edited line replaces that lookup with a
 local-key check and a default of `3`. The parser's traced `(args, void return)` behavior stays identical,
 but the unedited `RetryPolicy.ShouldRetry(503, 5)` changes from `true` to `false`. A payment gateway that
@@ -43,14 +55,6 @@ EXPECTED (edited file)   : 0 member(s), across 0 call site(s)
 UNEXPECTED (headline)    : 1 member(s), across 2 call site(s)
    frontier  SampleApp.RetryPolicy.ShouldRetry(System.Int32,System.Int32)
    untested: True
-```
-
-**Secondary — permission default.** `PermissionDefaultsParser.cs` changes `Reader` to `None`; the
-unedited `PermissionEvaluator.CanRead()` changes from `true` to `false`. Two diverged keys collapse to
-one unexpected, untested headline.
-
-```powershell
-pwsh -File tools/verify-diff.ps1 -Mutate -Change permission
 ```
 
 **Third mode — config parser.** The original `SettingsParser.cs` threshold mutation remains available;

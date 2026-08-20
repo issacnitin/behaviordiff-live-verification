@@ -2,6 +2,17 @@
 $ErrorActionPreference = 'Stop'
 $cases = @(
     @{
+        Change = 'enum'
+        ChangedFile = 'samples/SampleApp/AccountStatus.cs'
+        Headline = 'SampleApp.AccessControl.CanWithdraw(SampleApp.AccountStatus)'
+        DivergedKeys = 3
+        FrontierNodes = 2
+        ChangedCallSites = 3
+        ChangedCalls = 6
+        HeadlineCallSites = 2
+        UntestedCallSites = 1
+    }
+    @{
         Change = 'retry'
         ChangedFile = 'samples/SampleApp/ConfigParser.cs'
         Headline = 'SampleApp.RetryPolicy.ShouldRetry(System.Int32,System.Int32)'
@@ -10,17 +21,6 @@ $cases = @(
         ChangedCallSites = 2
         ChangedCalls = 4
         HeadlineCallSites = 2
-        UntestedCallSites = 1
-    }
-    @{
-        Change = 'permission'
-        ChangedFile = 'samples/SampleApp/PermissionDefaultsParser.cs'
-        Headline = 'SampleApp.PermissionEvaluator.CanRead()'
-        DivergedKeys = 2
-        FrontierNodes = 1
-        ChangedCallSites = 1
-        ChangedCalls = 2
-        HeadlineCallSites = 1
         UntestedCallSites = 1
     }
     @{
@@ -152,7 +152,40 @@ foreach ($case in $cases) {
         }
     }
 
-        Write-Host "PASS: edited parser was exercised but left no divergence/frontier footprint" -ForegroundColor Green
+    if ($case.Change -eq 'enum') {
+        $closedEvidence = @($finding.evidence | Where-Object {
+            $_.testId -like '*Closed_account_cannot_withdraw' `
+                -and $_.baseArgs -eq 'status=Primitive:AccountStatus.Closed' `
+                -and $_.prArgs -eq 'status=Primitive:AccountStatus.Suspended' `
+                -and $_.baseReturn -eq 'Primitive:false' `
+                -and $_.prReturn -eq 'Primitive:false' `
+                -and $_.assertionReacted -eq $false
+        })
+        if ($closedEvidence.Count -ne 1) {
+            throw 'enum: closed account partial oracle was not retained'
+        }
+
+        $suspendedEvidence = @($finding.evidence | Where-Object {
+            $_.testId -like '*Suspended_account_cannot_withdraw' `
+                -and $_.baseArgs -eq 'status=Primitive:AccountStatus.Suspended' `
+                -and $_.prArgs -eq 'status=Primitive:AccountStatus.Frozen' `
+                -and $_.baseReturn -eq 'Primitive:false' `
+                -and $_.prReturn -eq 'Primitive:true' `
+                -and $_.assertionReacted -eq $true
+        })
+        if ($suspendedEvidence.Count -ne 1) {
+            throw 'enum: suspended account did not change from blocked to allowed'
+        }
+
+        $executingTests = @($divergences.callTree | Where-Object {
+            $_.methodFullName -eq $case.Headline
+        } | Select-Object -ExpandProperty testId -Unique)
+        if ($executingTests.Count -ne 3) {
+            throw "enum: expected three tests to execute CanWithdraw, got $($executingTests.Count)"
+        }
+    }
+
+        Write-Host "PASS: edited file was exercised but left no divergence/frontier footprint" -ForegroundColor Green
         Write-Host ("PASS: {0} diverged keys -> {1} frontier node(s) ({2:N1}x)" -f `
             $frontier.counts.divergedKeys, $frontier.counts.frontierNodes, $ratio) -ForegroundColor Green
         Write-Host "PASS: $($case.Headline) has untested: True" -ForegroundColor Green

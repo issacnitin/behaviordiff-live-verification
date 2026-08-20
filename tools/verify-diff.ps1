@@ -12,7 +12,7 @@
 [CmdletBinding()]
 param(
     [switch]$Mutate,
-    [ValidateSet('discount', 'retry', 'permission', 'config', 'downgrade')]
+    [ValidateSet('discount', 'enum', 'retry', 'config', 'downgrade')]
     [string]$Change = 'discount',
     [switch]$SkipPrRebuild,
     [string]$WorkDirectory,
@@ -38,7 +38,7 @@ function Invoke-Suite([string]$stagedBin, [string]$outputDir) {
     New-Item -ItemType Directory -Path $outputDir | Out-Null
 
     $env:BEHAVIORDIFF_NAMESPACES = 'SampleApp'
-    $env:BEHAVIORDIFF_EXCLUDE_NAMESPACES = 'SampleApp.Diagnostics'
+    $env:BEHAVIORDIFF_EXCLUDE_NAMESPACES = 'SampleApp.Diagnostics,SampleApp.Persistence'
     $env:BEHAVIORDIFF_BACKEND = 'cecil'
     $env:BEHAVIORDIFF_TRACE = Join-Path $outputDir 'run.ndjson'
 
@@ -69,7 +69,14 @@ if (-not $SkipPrRebuild) {
         Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 
     if ($Mutate) {
-        if ($Change -eq 'retry') {
+        if ($Change -eq 'enum') {
+            $target = Join-Path $prTree 'samples/SampleApp/AccountStatus.cs'
+            $text = Get-Content $target -Raw
+            $mutated = $text -replace '        Suspended = 2,', "        Frozen = 2,`r`n        Suspended = 3,"
+            $mutated = $mutated -replace '        Closed = 3,', '        Closed = 4,'
+            $label = 'AccountStatus inserts Frozen before Suspended and Closed'
+        }
+        elseif ($Change -eq 'retry') {
             $target = Join-Path $prTree 'samples/SampleApp/ConfigParser.cs'
             $text = Get-Content $target -Raw
             $mutated = $text -replace 'RetrySettings\.MaxAttempts = int\.Parse\(raw\["max_attempts"\], CultureInfo\.InvariantCulture\);', @'
@@ -78,12 +85,6 @@ RetrySettings.MaxAttempts = raw.TryGetValue("max_attempts", out string? value)
                 : 3;
 '@
             $label = 'ConfigParser missing max_attempts fallback 10 -> 3'
-        }
-        elseif ($Change -eq 'permission') {
-            $target = Join-Path $prTree 'samples/SampleApp/PermissionDefaultsParser.cs'
-            $text = Get-Content $target -Raw
-            $mutated = $text -replace 'DefaultRole = "Reader"', 'DefaultRole = "None"'
-            $label = 'PermissionDefaultsParser default role Reader -> None'
         }
         elseif ($Change -eq 'discount') {
             $target = Join-Path $prTree 'samples/SampleApp/OrderService.cs'
@@ -137,7 +138,7 @@ $base2Exit = Invoke-Suite $baseBin (Join-Path $work 'base_run2')
 if ($base2Exit -ne 0) { throw "base_run2 tests failed: $base2Exit" }
 Write-Host '  base_run2 done'
 $prExit = Invoke-Suite $prBin (Join-Path $work 'pr_run')
-$expectedPrExit = if ($Mutate -and $Change -in @('retry', 'config', 'downgrade')) { 1 } else { 0 }
+$expectedPrExit = if ($Mutate -and $Change -in @('enum', 'retry', 'config', 'downgrade')) { 1 } else { 0 }
 if ($prExit -ne $expectedPrExit) {
     throw "pr_run test exit was $prExit, expected $expectedPrExit for change '$Change'"
 }
